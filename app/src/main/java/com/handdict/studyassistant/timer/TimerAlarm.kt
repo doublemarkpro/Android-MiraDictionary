@@ -15,9 +15,6 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.handdict.studyassistant.MainActivity
 import com.handdict.studyassistant.R
-import com.handdict.studyassistant.data.FocusRecord
-import com.handdict.studyassistant.data.LocalStore
-import com.handdict.studyassistant.data.TimerSnapshot
 
 object TimerAlarmScheduler {
     private const val REQUEST_CODE = 4107
@@ -69,13 +66,6 @@ class TimerAlarmReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val task = TimerAlarmScheduler.readTask(intent).ifBlank { "本轮作业" }
         val duration = TimerAlarmScheduler.readDuration(intent).coerceAtLeast(1)
-        val endAt = TimerAlarmScheduler.readEndAt(intent).takeIf { it > 0L } ?: System.currentTimeMillis()
-        val store = LocalStore(context)
-        store.addFocusRecord(FocusRecord(endAt, task, duration, endAt))
-        val timer = store.loadTimer()
-        if (timer.endAtMillis == endAt) {
-            store.saveTimer(TimerSnapshot(task, duration, 0, false, 0L))
-        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -96,8 +86,8 @@ class TimerAlarmReceiver : BroadcastReceiver() {
         )
         val notification = NotificationCompat.Builder(context, channelId)
             .setSmallIcon(R.drawable.ic_timer_notification)
-            .setContentTitle("作业时间到啦")
-            .setContentText("“$task”已完成 $duration 分钟，休息一下吧。")
+            .setContentTitle("已达到预计完成时间")
+            .setContentText("“$task”已计时 $duration 分钟，可继续计时或返回应用完成作业。")
             .setContentIntent(openApp)
             .setAutoCancel(true)
             .setPriority(NotificationCompat.PRIORITY_HIGH)

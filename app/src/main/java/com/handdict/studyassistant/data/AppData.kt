@@ -1,15 +1,27 @@
 package com.handdict.studyassistant.data
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
+import android.location.Geocoder
+import android.location.Location
+import android.location.LocationManager
+import android.os.Build
+import android.os.CancellationSignal
 import androidx.core.content.edit
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import org.json.JSONArray
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
+import java.util.Locale
+import kotlin.coroutines.resume
 
 data class DictionaryEntry(
     val word: String,
@@ -128,22 +140,31 @@ class DictionaryRepository(private val context: Context) {
     }
 }
 
-data class Lesson(val day: Int, val name: String, val start: String, val end: String)
+data class Lesson(val day: Int, val name: String, val period: Int)
 
 data class TimerSnapshot(
     val taskName: String = "语文作业",
-    val durationMinutes: Int = 35,
-    val remainingSeconds: Int = 35 * 60,
+    val subject: String = "语文",
+    val expectedMinutes: Int = 35,
+    val elapsedSeconds: Int = 0,
     val running: Boolean = false,
-    val endAtMillis: Long = 0L,
+    val startedAtMillis: Long = 0L,
 )
 
 data class FocusRecord(
     val id: Long,
     val taskName: String,
+    val subject: String,
     val durationMinutes: Int,
     val completedAtMillis: Long,
 )
+
+val homeworkSubjects = listOf("语文", "数学", "英语", "科学", "其他")
+
+fun inferSubject(taskName: String): String = homeworkSubjects
+    .dropLast(1)
+    .firstOrNull { taskName.contains(it) }
+    ?: "其他"
 
 class LocalStore(context: Context) {
     private val preferences = context.getSharedPreferences("mira_study", Context.MODE_PRIVATE)
@@ -152,30 +173,85 @@ class LocalStore(context: Context) {
         val stored = preferences.getString("lessons", null) ?: return defaultLessons
         return stored.lineSequence().mapNotNull { line ->
             val fields = line.split('|')
-            if (fields.size == 4) Lesson(fields[0].toIntOrNull() ?: 0, fields[1], fields[2], fields[3]) else null
+            when (fields.size) {
+                3 -> Lesson(fields[0].toIntOrNull() ?: 0, fields[1], fields[2].toIntOrNull()?.coerceIn(1, 12) ?: 1)
+                4 -> Lesson(fields[0].toIntOrNull() ?: 0, fields[1], legacyPeriod(fields[2]))
+                else -> null
+            }
         }.toList().ifEmpty { defaultLessons }
     }
 
     fun saveLessons(lessons: List<Lesson>) {
-        val encoded = lessons.joinToString("\n") { "${it.day}|${it.name}|${it.start}|${it.end}" }
+        val encoded = lessons.joinToString("\n") { "${it.day}|${it.name}|${it.period}" }
         preferences.edit { putString("lessons", encoded) }
     }
 
     fun loadTimer(): TimerSnapshot = TimerSnapshot(
         taskName = preferences.getString("timer_name", "语文作业") ?: "语文作业",
-        durationMinutes = preferences.getInt("timer_duration", 35),
-        remainingSeconds = preferences.getInt("timer_remaining", 35 * 60),
+        subject = preferences.getString("timer_subject", null)
+            ?: inferSubject(preferences.getString("timer_name", "语文作业") ?: "语文作业"),
+        expectedMinutes = preferences.getInt("timer_expected", loadExpectedMinutes()),
+        elapsedSeconds = preferences.getInt("timer_elapsed", 0).coerceAtLeast(0),
         running = preferences.getBoolean("timer_running", false),
-        endAtMillis = preferences.getLong("timer_end", 0L),
+        startedAtMillis = preferences.getLong("timer_started", 0L),
     )
 
     fun saveTimer(snapshot: TimerSnapshot) {
         preferences.edit {
             putString("timer_name", snapshot.taskName)
-            putInt("timer_duration", snapshot.durationMinutes)
-            putInt("timer_remaining", snapshot.remainingSeconds)
+            putString("timer_subject", snapshot.subject)
+            putInt("timer_expected", snapshot.expectedMinutes)
+            putInt("timer_elapsed", snapshot.elapsedSeconds)
             putBoolean("timer_running", snapshot.running)
-            putLong("timer_end", snapshot.endAtMillis)
+            putLong("timer_started", snapshot.startedAtMillis)
+        }
+    }
+
+    fun loadExpectedMinutes(): Int = preferences.getInt("default_expected_minutes", 35).coerceIn(1, 240)
+
+    fun saveExpectedMinutes(minutes: Int) {
+        preferences.edit { putInt("default_expected_minutes", minutes.coerceIn(1, 240)) }
+    }
+
+    fun loadNavigationStyle(): String = preferences.getString("navigation_style", "fresh") ?: "fresh"
+
+    fun saveNavigationStyle(style: String) {
+        preferences.edit { putString("navigation_style", style) }
+    }
+
+    fun loadWeatherRefreshMinutes(): Int =
+        preferences.getInt("weather_refresh_minutes", 60).coerceIn(15, 720)
+
+    fun saveWeatherRefreshMinutes(minutes: Int) {
+        preferences.edit { putInt("weather_refresh_minutes", minutes.coerceIn(15, 720)) }
+    }
+
+    fun loadWeatherCache(): WeatherCache? {
+        val updatedAt = preferences.getLong("weather_updated_at", 0L)
+        val place = preferences.getString("weather_place", null) ?: return null
+        if (updatedAt <= 0L || !preferences.contains("weather_temperature")) return null
+        return WeatherCache(
+            weather = LocatedWeather(
+                placeName = place,
+                info = WeatherInfo(
+                    temperature = preferences.getFloat("weather_temperature", 0f).toDouble(),
+                    humidity = preferences.getInt("weather_humidity", 0),
+                    windSpeed = preferences.getFloat("weather_wind_speed", 0f).toDouble(),
+                    weatherCode = preferences.getInt("weather_code", 0),
+                ),
+            ),
+            updatedAtMillis = updatedAt,
+        )
+    }
+
+    fun saveWeatherCache(cache: WeatherCache) {
+        preferences.edit {
+            putString("weather_place", cache.weather.placeName)
+            putFloat("weather_temperature", cache.weather.info.temperature.toFloat())
+            putInt("weather_humidity", cache.weather.info.humidity)
+            putFloat("weather_wind_speed", cache.weather.info.windSpeed.toFloat())
+            putInt("weather_code", cache.weather.info.weatherCode)
+            putLong("weather_updated_at", cache.updatedAtMillis)
         }
     }
 
@@ -188,6 +264,7 @@ class LocalStore(context: Context) {
                 FocusRecord(
                     id = item.getLong("id"),
                     taskName = item.getString("task"),
+                    subject = item.optString("subject").ifBlank { inferSubject(item.getString("task")) },
                     durationMinutes = item.getInt("duration"),
                     completedAtMillis = item.getLong("completedAt"),
                 )
@@ -200,13 +277,14 @@ class LocalStore(context: Context) {
         val records = (loadFocusRecords() + record)
             .distinctBy { it.id }
             .sortedByDescending { it.completedAtMillis }
-            .take(50)
+            .take(500)
         val array = JSONArray()
         records.forEach { item ->
             array.put(
                 JSONObject()
                     .put("id", item.id)
                     .put("task", item.taskName)
+                    .put("subject", item.subject)
                     .put("duration", item.durationMinutes)
                     .put("completedAt", item.completedAtMillis)
             )
@@ -219,14 +297,18 @@ class LocalStore(context: Context) {
     }
 
     companion object {
+        private fun legacyPeriod(start: String): Int = when (start) {
+            "08:00" -> 1; "09:00" -> 2; "10:00" -> 3
+            "11:00" -> 4; "14:00" -> 5; "15:00" -> 6
+            else -> 1
+        }
+
         val defaultLessons = listOf(
-            Lesson(0, "语文", "08:00", "08:45"), Lesson(0, "数学", "09:00", "09:45"),
-            Lesson(0, "英语", "10:00", "10:45"), Lesson(0, "体育", "14:00", "14:45"),
-            Lesson(1, "数学", "08:00", "08:45"), Lesson(1, "科学", "09:00", "09:45"),
-            Lesson(1, "美术", "14:00", "14:45"), Lesson(2, "语文", "08:00", "08:45"),
-            Lesson(2, "英语", "09:00", "09:45"), Lesson(2, "音乐", "14:00", "14:45"),
-            Lesson(3, "数学", "08:00", "08:45"), Lesson(3, "信息技术", "10:00", "10:45"),
-            Lesson(4, "语文", "08:00", "08:45"), Lesson(4, "班会", "15:00", "15:45"),
+            Lesson(0, "语文", 1), Lesson(0, "数学", 2), Lesson(0, "英语", 3), Lesson(0, "体育", 5),
+            Lesson(1, "数学", 1), Lesson(1, "科学", 2), Lesson(1, "美术", 5),
+            Lesson(2, "语文", 1), Lesson(2, "英语", 2), Lesson(2, "音乐", 5),
+            Lesson(3, "数学", 1), Lesson(3, "信息技术", 3),
+            Lesson(4, "语文", 1), Lesson(4, "班会", 6),
         )
     }
 }
@@ -238,6 +320,55 @@ val weatherCities = listOf(
     WeatherCity("青岛", 36.0671, 120.3826), WeatherCity("深圳", 22.5431, 114.0579),
     WeatherCity("成都", 30.5728, 104.0668),
 )
+
+data class LocatedWeather(val placeName: String, val info: WeatherInfo)
+
+data class WeatherCache(val weather: LocatedWeather, val updatedAtMillis: Long)
+
+object DeviceWeatherRepository {
+    @SuppressLint("MissingPermission")
+    suspend fun load(context: Context): LocatedWeather {
+        val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        check(hasFine || hasCoarse) { "需要定位权限" }
+
+        val manager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val providers = listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+            .filter { runCatching { manager.isProviderEnabled(it) }.getOrDefault(false) }
+        check(providers.isNotEmpty()) { "请先开启设备定位服务" }
+
+        val cached = providers.mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
+            .maxByOrNull { it.time }
+        val location = if (cached != null && System.currentTimeMillis() - cached.time < 30 * 60 * 1000L) {
+            cached
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            currentLocation(manager, providers.first()) ?: cached
+        } else cached
+        checkNotNull(location) { "暂时无法获取当前位置，请稍后重试" }
+
+        @Suppress("DEPRECATION")
+        val address = runCatching {
+            Geocoder(context, Locale.CHINA).getFromLocation(location.latitude, location.longitude, 1)?.firstOrNull()
+        }.getOrNull()
+        val placeName = address?.locality
+            ?: address?.subAdminArea
+            ?: address?.adminArea?.removeSuffix("市")
+            ?: "当前位置"
+        val info = WeatherRepository.load(WeatherCity(placeName, location.latitude, location.longitude))
+        return LocatedWeather(placeName, info)
+    }
+
+    @SuppressLint("MissingPermission")
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.R)
+    private suspend fun currentLocation(manager: LocationManager, provider: String): Location? =
+        suspendCancellableCoroutine { continuation ->
+            val cancellationSignal = CancellationSignal()
+            manager.getCurrentLocation(provider, cancellationSignal, Runnable::run) { location ->
+                if (continuation.isActive) continuation.resume(location)
+            }
+            continuation.invokeOnCancellation { cancellationSignal.cancel() }
+        }
+}
 
 data class WeatherInfo(
     val temperature: Double,
