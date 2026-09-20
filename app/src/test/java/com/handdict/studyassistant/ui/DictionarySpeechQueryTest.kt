@@ -7,6 +7,7 @@ class DictionarySpeechQueryTest {
     @Test
     fun extractsCharacterFromNaturalQuestion() {
         assertEquals("智", extractDictionaryQuery("智能的智怎么写"))
+        assertEquals("智", extractDictionaryQuery("你好小智，智能的智怎么写"))
         assertEquals("智", extractDictionaryQuery("智字怎么写？"))
         assertEquals("规", extractDictionaryQuery("请帮我查一下规"))
     }

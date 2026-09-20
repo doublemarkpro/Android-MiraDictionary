@@ -1,7 +1,6 @@
 package com.handdict.studyassistant.ui
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -19,10 +18,14 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -33,6 +36,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -48,18 +52,18 @@ import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Cloud
-import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SentimentSatisfiedAlt
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -71,12 +75,13 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -94,8 +99,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -106,6 +114,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.Font
@@ -115,10 +124,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import com.handdict.studyassistant.R
 import com.handdict.studyassistant.data.DictionaryEntry
 import com.handdict.studyassistant.data.DictionaryRepository
 import com.handdict.studyassistant.data.DeviceWeatherRepository
+import com.handdict.studyassistant.data.DailyWeather
 import com.handdict.studyassistant.data.FocusRecord
 import com.handdict.studyassistant.data.Lesson
 import com.handdict.studyassistant.data.LocatedWeather
@@ -126,18 +139,21 @@ import com.handdict.studyassistant.data.LocalStore
 import com.handdict.studyassistant.data.TimerSnapshot
 import com.handdict.studyassistant.data.WeatherInfo
 import com.handdict.studyassistant.data.WeatherCache
+import com.handdict.studyassistant.data.WeatherCity
+import com.handdict.studyassistant.data.WeatherReport
+import com.handdict.studyassistant.data.defaultHomeworkSubjects
 import com.handdict.studyassistant.data.WeatherRepository
-import com.handdict.studyassistant.data.homeworkSubjects
-import com.handdict.studyassistant.data.weatherCities
 import com.handdict.studyassistant.timer.TimerAlarmScheduler
 import com.handdict.studyassistant.ui.theme.MiraBlue
 import com.handdict.studyassistant.ui.theme.MiraGreen
 import com.handdict.studyassistant.ui.theme.MiraNavy
 import com.handdict.studyassistant.ui.theme.MiraOrange
 import com.handdict.studyassistant.ui.theme.MiraSky
+import com.handdict.studyassistant.voice.WakeWordDetector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.text.Normalizer
 import java.time.LocalDate
 import java.time.DayOfWeek
 import java.time.Instant
@@ -147,6 +163,11 @@ import java.time.temporal.TemporalAdjusters
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 private enum class AppScreen(val label: String, val symbol: String) {
     HOME("首页", "⌂"), TIMER("作业计时", "◷"), DICTIONARY("查字典", "▤"),
@@ -172,17 +193,95 @@ private fun screenAccent(screen: AppScreen): Color = when (screen) {
     AppScreen.SETTINGS -> Color(0xFF7B72E9)
 }
 
+private fun screenBackgroundResource(screen: AppScreen): Int = when (screen) {
+    AppScreen.HOME -> R.drawable.mira_bg_home_v2
+    AppScreen.TIMER -> R.drawable.mira_bg_timer_v2
+    AppScreen.DICTIONARY -> R.drawable.mira_bg_dictionary
+    AppScreen.SCHEDULE -> R.drawable.mira_bg_schedule
+    AppScreen.WEATHER -> R.drawable.mira_bg_weather
+    AppScreen.SETTINGS -> R.drawable.mira_bg_settings
+}
+
+private fun navigationIconResource(style: NavigationStyle, screen: AppScreen): Int = when (style) {
+    NavigationStyle.FRESH -> when (screen) {
+        AppScreen.HOME -> R.drawable.mira_nav_fresh_home
+        AppScreen.TIMER -> R.drawable.mira_nav_fresh_timer
+        AppScreen.DICTIONARY -> R.drawable.mira_nav_fresh_dictionary
+        AppScreen.SCHEDULE -> R.drawable.mira_nav_fresh_schedule
+        AppScreen.WEATHER -> R.drawable.mira_nav_fresh_weather
+        AppScreen.SETTINGS -> R.drawable.mira_nav_fresh_settings
+    }
+    NavigationStyle.COLORFUL -> when (screen) {
+        AppScreen.HOME -> R.drawable.mira_nav_colorful_home
+        AppScreen.TIMER -> R.drawable.mira_nav_colorful_timer
+        AppScreen.DICTIONARY -> R.drawable.mira_nav_colorful_dictionary
+        AppScreen.SCHEDULE -> R.drawable.mira_nav_colorful_schedule
+        AppScreen.WEATHER -> R.drawable.mira_nav_colorful_weather
+        AppScreen.SETTINGS -> R.drawable.mira_nav_colorful_settings
+    }
+    NavigationStyle.JOURNAL -> when (screen) {
+        AppScreen.HOME -> R.drawable.mira_nav_journal_home
+        AppScreen.TIMER -> R.drawable.mira_nav_journal_timer
+        AppScreen.DICTIONARY -> R.drawable.mira_nav_journal_dictionary
+        AppScreen.SCHEDULE -> R.drawable.mira_nav_journal_schedule
+        AppScreen.WEATHER -> R.drawable.mira_nav_journal_weather
+        AppScreen.SETTINGS -> R.drawable.mira_nav_journal_settings
+    }
+    NavigationStyle.MINIMAL -> when (screen) {
+        AppScreen.HOME -> R.drawable.mira_nav_minimal_home
+        AppScreen.TIMER -> R.drawable.mira_nav_minimal_timer
+        AppScreen.DICTIONARY -> R.drawable.mira_nav_minimal_dictionary
+        AppScreen.SCHEDULE -> R.drawable.mira_nav_minimal_schedule
+        AppScreen.WEATHER -> R.drawable.mira_nav_minimal_weather
+        AppScreen.SETTINGS -> R.drawable.mira_nav_minimal_settings
+    }
+    NavigationStyle.STATIONERY -> when (screen) {
+        AppScreen.HOME -> R.drawable.mira_nav_stationery_home
+        AppScreen.TIMER -> R.drawable.mira_nav_stationery_timer
+        AppScreen.DICTIONARY -> R.drawable.mira_nav_stationery_dictionary
+        AppScreen.SCHEDULE -> R.drawable.mira_nav_stationery_schedule
+        AppScreen.WEATHER -> R.drawable.mira_nav_stationery_weather
+        AppScreen.SETTINGS -> R.drawable.mira_nav_stationery_settings
+    }
+}
+
+private fun timerCurrentSectionIcon(style: NavigationStyle): Int = when (style) {
+    NavigationStyle.FRESH -> R.drawable.mira_timer_section_current_fresh
+    NavigationStyle.COLORFUL -> R.drawable.mira_timer_section_current_colorful
+    NavigationStyle.JOURNAL -> R.drawable.mira_timer_section_current_journal
+    NavigationStyle.MINIMAL -> R.drawable.mira_timer_section_current_minimal
+    NavigationStyle.STATIONERY -> R.drawable.mira_timer_section_current_stationery
+}
+
+private fun timerWeeklySectionIcon(style: NavigationStyle): Int = when (style) {
+    NavigationStyle.FRESH -> R.drawable.mira_timer_section_weekly_fresh
+    NavigationStyle.COLORFUL -> R.drawable.mira_timer_section_weekly_colorful
+    NavigationStyle.JOURNAL -> R.drawable.mira_timer_section_weekly_journal
+    NavigationStyle.MINIMAL -> R.drawable.mira_timer_section_weekly_minimal
+    NavigationStyle.STATIONERY -> R.drawable.mira_timer_section_weekly_stationery
+}
+
+private fun subjectAccent(subject: String): Color = when (subject) {
+    "语文" -> Color(0xFFFF766B)
+    "数学" -> Color(0xFF438FF4)
+    "英语" -> Color(0xFF45B978)
+    "科学" -> Color(0xFF9A70E8)
+    "体育" -> Color(0xFFFFA528)
+    "美术" -> Color(0xFFE65DAA)
+    else -> listOf(Color(0xFF25A9C5), Color(0xFFF08A55), Color(0xFF6977D7))[subject.hashCode().mod(3)]
+}
+
 private val screenItems = AppScreen.entries
 private val cardShape = RoundedCornerShape(24.dp)
 private val miraDisplayFont = FontFamily(Font(R.font.zcool_kuaile_regular))
 private val miraHandFont = FontFamily(Font(R.font.ma_shan_zheng_regular))
 private val miraKaiFont = FontFamily(Font(R.font.lxgw_wenkai_regular))
 
-private fun formatTimer(totalSeconds: Int): String = String.format(
+internal fun formatTimer(totalSeconds: Int): String = String.format(
     Locale.ROOT,
     "%02d:%02d",
-    totalSeconds.coerceAtLeast(0) / 60,
-    totalSeconds.coerceAtLeast(0) % 60,
+    totalSeconds.coerceIn(0, 99 * 60 + 59) / 60,
+    totalSeconds.coerceIn(0, 99 * 60 + 59) % 60,
 )
 
 private fun screenIcon(screen: AppScreen): ImageVector = when (screen) {
@@ -201,24 +300,167 @@ fun MiraStudyApp() {
     var selected by rememberSaveable { mutableStateOf(AppScreen.HOME) }
     var pendingDictionaryQuery by rememberSaveable { mutableStateOf("") }
     var navigationStyleKey by rememberSaveable { mutableStateOf(store.loadNavigationStyle()) }
+    var voiceWakeEnabled by rememberSaveable { mutableStateOf(store.loadVoiceWakeEnabled()) }
+    var wakeState by remember { mutableStateOf(WakeWordDetector.State.IDLE) }
+    var appInForeground by remember { mutableStateOf(true) }
+    var manualVoiceActive by remember { mutableStateOf(false) }
+    var showWakeVoiceOverlay by remember { mutableStateOf(false) }
+    var wakeListening by remember { mutableStateOf(false) }
+    var wakeTranscript by remember { mutableStateOf("") }
+    var wakeError by remember { mutableStateOf<String?>(null) }
+    var wakeLevel by remember { mutableFloatStateOf(0f) }
+    var wakeTriggerEpoch by remember { mutableIntStateOf(0) }
     val navigationStyle = navigationStyleFor(navigationStyleKey)
+    val wakeDetector = remember {
+        WakeWordDetector(
+            context = context.applicationContext,
+            onWakeWord = {
+                showWakeVoiceOverlay = true
+                wakeTranscript = "你好小智"
+                wakeError = null
+                wakeTriggerEpoch++
+            },
+            onStateChanged = { wakeState = it },
+        )
+    }
+    val wakeSpeechRecognizer = remember {
+        if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
+    }
+    DisposableEffect(wakeSpeechRecognizer) {
+        wakeSpeechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) { wakeListening = true; wakeError = null }
+            override fun onBeginningOfSpeech() { wakeListening = true }
+            override fun onRmsChanged(rmsdB: Float) { wakeLevel = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f) }
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() { wakeListening = false }
+            override fun onError(error: Int) {
+                wakeListening = false
+                wakeError = when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH -> "没有听清，请再说一次完整问题"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有听到问题，请再试一次"
+                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "语音服务暂时不可用"
+                    else -> "识别没有完成，请再试一次"
+                }
+            }
+            override fun onResults(results: Bundle?) {
+                wakeListening = false
+                val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                if (spoken.isBlank()) {
+                    wakeError = "没有听清，请再说一次完整问题"
+                    return
+                }
+                wakeTranscript = spoken
+                pendingDictionaryQuery = extractDictionaryQuery(spoken)
+                selected = AppScreen.DICTIONARY
+                showWakeVoiceOverlay = false
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let {
+                    if (it.isNotBlank()) wakeTranscript = it
+                }
+            }
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        })
+        onDispose { wakeSpeechRecognizer?.destroy() }
+    }
+    fun startWakeCommandRecognition() {
+        wakeTranscript = ""
+        wakeError = null
+        showWakeVoiceOverlay = true
+        if (wakeSpeechRecognizer == null) {
+            wakeListening = false
+            wakeError = "设备暂不支持语音识别"
+            return
+        }
+        wakeListening = true
+        runCatching {
+            wakeSpeechRecognizer.startListening(dictionarySpeechIntent().putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
+        }.onFailure {
+            wakeListening = false
+            wakeError = "语音识别暂时无法启动"
+        }
+    }
+    val voiceWakePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        voiceWakeEnabled = granted
+        store.saveVoiceWakeEnabled(granted)
+        if (!granted) Toast.makeText(context, "需要麦克风权限才能使用“你好小智”", Toast.LENGTH_SHORT).show()
+    }
+    fun setVoiceWakeEnabled(enabled: Boolean) {
+        if (!enabled) {
+            voiceWakeEnabled = false
+            store.saveVoiceWakeEnabled(false)
+            wakeDetector.stop()
+        } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            voiceWakeEnabled = true
+            store.saveVoiceWakeEnabled(true)
+        } else {
+            voiceWakePermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+    DisposableEffect(context, wakeDetector) {
+        val lifecycleOwner = context as? LifecycleOwner
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> appInForeground = true
+                Lifecycle.Event.ON_STOP -> appInForeground = false
+                else -> Unit
+            }
+        }
+        lifecycleOwner?.lifecycle?.addObserver(observer)
+        onDispose {
+            lifecycleOwner?.lifecycle?.removeObserver(observer)
+            wakeDetector.release()
+        }
+    }
+    LaunchedEffect(voiceWakeEnabled, appInForeground, manualVoiceActive, showWakeVoiceOverlay) {
+        val hasPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (voiceWakeEnabled && appInForeground && !manualVoiceActive && !showWakeVoiceOverlay && hasPermission) {
+            delay(650)
+            wakeDetector.start()
+        } else {
+            wakeDetector.stop()
+        }
+    }
+    LaunchedEffect(wakeTriggerEpoch) {
+        if (wakeTriggerEpoch > 0) {
+            wakeDetector.stop()
+            delay(100)
+            startWakeCommandRecognition()
+        }
+    }
+    val wakeStatus = when {
+        !voiceWakeEnabled -> "已关闭"
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED -> "需要麦克风权限"
+        showWakeVoiceOverlay -> "正在识别你的问题"
+        wakeState == WakeWordDetector.State.LOADING -> "正在加载本地唤醒模型"
+        wakeState == WakeWordDetector.State.LISTENING -> "正在等待“你好小智”"
+        wakeState == WakeWordDetector.State.ERROR -> "启动失败，请关闭后重试"
+        else -> "准备中"
+    }
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background,
     ) {
         BoxWithConstraints(
-            modifier = Modifier.fillMaxSize()
-                .background(Brush.linearGradient(listOf(Color(0xFFF7FBFF), Color(0xFFFFFCF5))))
-                .statusBarsPadding().navigationBarsPadding(),
+            modifier = Modifier.fillMaxSize(),
         ) {
+            Image(
+                painter = painterResource(screenBackgroundResource(selected)),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.FillBounds,
+            )
             if (maxWidth >= 720.dp) {
-                Row(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                     TabletNavigation(selected = selected, style = navigationStyle, onSelected = { selected = it })
                     Column(Modifier.fillMaxSize()) {
                         when (selected) {
                             AppScreen.HOME -> HomeHeroHeader()
-                            AppScreen.TIMER -> TimerHeroHeader()
-                            else -> AppHeader(selected)
+                            AppScreen.TIMER -> TimerHeroHeader(navigationStyle)
+                            AppScreen.DICTIONARY -> DictionaryHeroHeader(navigationStyle)
+                            AppScreen.SCHEDULE -> ScheduleHeroHeader(navigationStyle)
+                            AppScreen.WEATHER -> WeatherHeroHeader(navigationStyle)
+                            else -> AppHeader(selected, navigationStyle)
                         }
                         ScreenContent(
                             screen = selected,
@@ -233,16 +475,23 @@ fun MiraStudyApp() {
                                 navigationStyleKey = style.key
                                 store.saveNavigationStyle(style.key)
                             },
+                            voiceWakeEnabled = voiceWakeEnabled,
+                            voiceWakeStatus = wakeStatus,
+                            onVoiceWakeEnabledChanged = ::setVoiceWakeEnabled,
+                            onManualVoiceSessionChanged = { manualVoiceActive = it },
                             modifier = Modifier.weight(1f),
                         )
                     }
                 }
             } else {
-                Column(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                     when (selected) {
                         AppScreen.HOME -> HomeHeroHeader()
-                        AppScreen.TIMER -> TimerHeroHeader()
-                        else -> AppHeader(selected)
+                        AppScreen.TIMER -> TimerHeroHeader(navigationStyle)
+                        AppScreen.DICTIONARY -> DictionaryHeroHeader(navigationStyle)
+                        AppScreen.SCHEDULE -> ScheduleHeroHeader(navigationStyle)
+                        AppScreen.WEATHER -> WeatherHeroHeader(navigationStyle)
+                        else -> AppHeader(selected, navigationStyle)
                     }
                     ScreenContent(
                         screen = selected,
@@ -257,70 +506,121 @@ fun MiraStudyApp() {
                             navigationStyleKey = style.key
                             store.saveNavigationStyle(style.key)
                         },
+                        voiceWakeEnabled = voiceWakeEnabled,
+                        voiceWakeStatus = wakeStatus,
+                        onVoiceWakeEnabledChanged = ::setVoiceWakeEnabled,
+                        onManualVoiceSessionChanged = { manualVoiceActive = it },
                         modifier = Modifier.weight(1f),
                     )
                     CompactNavigation(selected = selected, onSelected = { selected = it })
                 }
+            }
+            if (showWakeVoiceOverlay) {
+                Box(Modifier.fillMaxSize().background(Color(0xFFF7FBFF).copy(alpha = 0.72f)))
+                HomeVoiceOverlay(
+                    listening = wakeListening,
+                    transcript = wakeTranscript,
+                    error = wakeError,
+                    level = wakeLevel,
+                    onRetry = { startWakeCommandRecognition() },
+                    onCancel = {
+                        wakeSpeechRecognizer?.cancel()
+                        wakeListening = false
+                        showWakeVoiceOverlay = false
+                    },
+                    onComplete = {
+                        if (wakeTranscript.isNotBlank()) {
+                            pendingDictionaryQuery = extractDictionaryQuery(wakeTranscript)
+                            selected = AppScreen.DICTIONARY
+                        }
+                        showWakeVoiceOverlay = false
+                    },
+                    modifier = Modifier.align(Alignment.Center),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun AppHeader(selected: AppScreen) {
-    val date = remember {
-        LocalDate.now().format(DateTimeFormatter.ofPattern("M月d日 EEEE", Locale.CHINA))
+private fun LiveDateTimeText(
+    modifier: Modifier = Modifier,
+    includeYear: Boolean = false,
+    fontSize: Int = 13,
+    color: Color = Color(0xFF516B8D),
+) {
+    var nowMillis by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            val current = System.currentTimeMillis()
+            nowMillis = current
+            delay((1_000L - current % 1_000L).coerceAtLeast(50L))
+        }
     }
+    val value = remember(nowMillis, includeYear) {
+        val pattern = if (includeYear) "yyyy年M月d日 EEEE  HH:mm:ss" else "M月d日 EEEE  HH:mm:ss"
+        Instant.ofEpochMilli(nowMillis).atZone(ZoneId.systemDefault())
+            .format(DateTimeFormatter.ofPattern(pattern, Locale.CHINA))
+    }
+    Text(value, modifier = modifier, color = color, fontSize = fontSize.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+private fun PageTitleBlock(
+    screen: AppScreen,
+    navigationStyle: NavigationStyle,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(82.dp).padding(horizontal = 30.dp),
+        modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
-            Text(if (selected == AppScreen.HOME) "Mira 学习助手" else selected.label, style = MaterialTheme.typography.headlineMedium)
-            Spacer(Modifier.height(4.dp))
-            Box(Modifier.width(if (selected == AppScreen.HOME) 74.dp else 42.dp).height(4.dp).background(screenAccent(selected), CircleShape))
+        NavigationStyleIcon(navigationStyle, screen, Modifier.size(50.dp))
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.width(190.dp)) {
+            Text(
+                screen.label,
+                color = Color(0xFF082B63),
+                fontSize = 42.sp,
+                lineHeight = 44.sp,
+                fontWeight = FontWeight.Black,
+                maxLines = 1,
+            )
+            Box(Modifier.width(86.dp).height(6.dp).background(Color(0xFFFFC832), CircleShape))
+            LiveDateTimeText(fontSize = 12, color = Color(0xFF516B8D))
         }
-        Spacer(Modifier.width(20.dp))
-        Text(date, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.weight(1f))
-        Surface(color = Color(0xFFFFF3C9), shape = RoundedCornerShape(14.dp)) {
-            Text("⭐ 为今天的进步加油 · 认真一点点，成长一大步", Modifier.padding(horizontal = 16.dp, vertical = 9.dp), color = Color(0xFF80601B))
+    }
+}
+
+@Composable
+private fun AppHeader(selected: AppScreen, navigationStyle: NavigationStyle) {
+    Box(Modifier.fillMaxWidth().height(112.dp).clipToBounds()) {
+        PageTitleBlock(
+            screen = selected,
+            navigationStyle = navigationStyle,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 30.dp),
+        )
+        Surface(
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 30.dp),
+            color = Color(0xFFFFF3C9),
+            shape = RoundedCornerShape(14.dp),
+        ) {
+            Text(
+                "⭐ 为今天的进步加油 · 认真一点点，成长一大步",
+                Modifier.padding(horizontal = 16.dp, vertical = 9.dp),
+                color = Color(0xFF80601B),
+            )
         }
     }
 }
 
 @Composable
 private fun HomeHeroHeader() {
-    val today = remember {
-        LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy年M月d日  EEEE", Locale.CHINA))
-    }
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(178.dp)
-            .background(
-                Brush.linearGradient(
-                    listOf(Color(0xFFDFF2FF), Color(0xFFFDFCF7), Color(0xFFE4F6EB)),
-                ),
-            ),
+            .height(178.dp),
     ) {
-        Canvas(Modifier.fillMaxSize()) {
-            val cloud = Color.White.copy(alpha = 0.86f)
-            drawCircle(cloud, radius = size.height * 0.62f, center = Offset(size.width * 0.23f, size.height * 0.56f))
-            drawCircle(cloud, radius = size.height * 0.48f, center = Offset(size.width * 0.40f, size.height * 0.51f))
-            drawCircle(Color.White.copy(alpha = 0.58f), radius = size.height * 0.42f, center = Offset(size.width * 0.59f, size.height * 0.25f))
-            val underline = Path().apply {
-                moveTo(size.width * 0.075f, size.height * 0.50f)
-                quadraticTo(size.width * 0.24f, size.height * 0.56f, size.width * 0.41f, size.height * 0.48f)
-            }
-            drawPath(underline, Color(0xFFFFCA3A), style = Stroke(width = 6f, cap = StrokeCap.Round))
-        }
-        Image(
-            painter = painterResource(R.drawable.mira_green_hills),
-            contentDescription = null,
-            modifier = Modifier.align(Alignment.BottomStart).width(150.dp).height(74.dp).alpha(0.66f),
-            contentScale = ContentScale.Crop,
-        )
         Column(Modifier.align(Alignment.CenterStart).padding(start = 30.dp, bottom = 1.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Star, null, tint = Color(0xFFFFC437), modifier = Modifier.size(36.dp))
@@ -333,6 +633,7 @@ private fun HomeHeroHeader() {
                     fontWeight = FontWeight.Black,
                 )
             }
+            Box(Modifier.padding(start = 56.dp, top = 2.dp).width(360.dp).height(5.dp).background(Color(0xFFFFCA3A), CircleShape))
             Row(Modifier.padding(start = 56.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("好好学习，遇见更棒的自己！", color = Color(0xFF496991), fontSize = 20.sp, fontFamily = miraHandFont)
                 Spacer(Modifier.width(13.dp))
@@ -340,79 +641,154 @@ private fun HomeHeroHeader() {
             }
         }
         Column(Modifier.align(Alignment.Center).padding(start = 260.dp, top = 26.dp)) {
-            Text(today, color = Color(0xFF173C72), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            LiveDateTimeText(includeYear = true, fontSize = 18, color = Color(0xFF173C72))
             Text("今天也是闪闪发光的一天！", color = Color(0xFF5A7194), fontFamily = miraHandFont, fontSize = 17.sp, modifier = Modifier.padding(top = 6.dp))
         }
-        Image(
-            painter = painterResource(R.drawable.mira_home_header_student),
-            contentDescription = "开心学习的小学生",
-            modifier = Modifier.align(Alignment.BottomEnd).width(310.dp).height(172.dp).padding(end = 12.dp),
-            contentScale = ContentScale.Fit,
-        )
     }
 }
 
 @Composable
-private fun TimerHeroHeader() {
+private fun TimerHeroHeader(navigationStyle: NavigationStyle) {
     Box(
-        Modifier.fillMaxWidth().height(112.dp).background(
-            Brush.horizontalGradient(listOf(Color(0xFFCDEEFF), Color(0xFFBCE8FF), Color(0xFFE5F8FF))),
-        ),
+        Modifier.fillMaxWidth().height(112.dp)
+            .background(Brush.horizontalGradient(listOf(Color(0xFFC7ECFF).copy(alpha = 0.52f), Color(0xFFB9E5FB).copy(alpha = 0.38f), Color(0xFFDDF5FF).copy(alpha = 0.48f))))
+            .clipToBounds(),
+    ) {
+        Box(Modifier.align(Alignment.CenterEnd).width(390.dp).height(112.dp).clipToBounds()) {
+            Image(
+                painterResource(R.drawable.mira_timer_header_decor_v3),
+                contentDescription = null,
+                modifier = Modifier.align(Alignment.Center).width(360.dp).height(180.dp),
+                contentScale = ContentScale.Fit,
+            )
+            Text(
+                "⭐ 加油！\n你可以的！",
+                modifier = Modifier.align(Alignment.Center).offset(x = 32.dp, y = 5.dp).rotate(-4f),
+                color = Color(0xFF29476E),
+                fontFamily = miraHandFont,
+                fontSize = 15.sp,
+                lineHeight = 20.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+        PageTitleBlock(
+            screen = AppScreen.TIMER,
+            navigationStyle = navigationStyle,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 30.dp),
+        )
+        Column(Modifier.align(Alignment.CenterStart).padding(start = 310.dp)) {
+            Text("专注当下，", color = Color(0xFF496987), fontSize = 18.sp, fontFamily = miraHandFont)
+            Text("每天都有进步！  ☺", color = Color(0xFF496987), fontSize = 18.sp, fontFamily = miraHandFont)
+        }
+    }
+}
+
+@Composable
+private fun DictionaryHeroHeader(navigationStyle: NavigationStyle) {
+    Box(
+        Modifier.fillMaxWidth().height(112.dp)
+            .background(Brush.horizontalGradient(listOf(Color(0xFFD6F1FF).copy(alpha = 0.50f), Color(0xFFF8FCFF).copy(alpha = 0.28f), Color(0xFFDFF5FF).copy(alpha = 0.45f))))
+            .clipToBounds(),
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            drawCircle(Color.White.copy(alpha = 0.72f), size.height * 0.48f, Offset(size.width * 0.48f, size.height * 0.72f))
-            drawCircle(Color.White.copy(alpha = 0.72f), size.height * 0.38f, Offset(size.width * 0.59f, size.height * 0.70f))
-            val underline = Path().apply {
-                moveTo(size.width * 0.18f, size.height * 0.72f)
-                quadraticTo(size.width * 0.21f, size.height * 0.50f, size.width * 0.25f, size.height * 0.68f)
-                quadraticTo(size.width * 0.27f, size.height * 0.77f, size.width * 0.30f, size.height * 0.61f)
-            }
-            drawPath(underline, Color(0xFFFFD939), style = Stroke(7f, cap = StrokeCap.Round))
+            val cloud = Color.White.copy(alpha = 0.72f)
+            drawCircle(cloud, size.height * 0.34f, Offset(size.width * 0.28f, size.height * 0.64f))
+            drawCircle(cloud, size.height * 0.24f, Offset(size.width * 0.34f, size.height * 0.54f))
+            drawCircle(cloud.copy(alpha = 0.55f), size.height * 0.21f, Offset(size.width * 0.72f, size.height * 0.34f))
         }
-        Row(
-            Modifier.align(Alignment.CenterStart).padding(start = 26.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("✏️", fontSize = 39.sp)
-            Spacer(Modifier.width(10.dp))
-            Text("作业计时", color = Color(0xFF082B63), fontSize = 39.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.width(48.dp))
-            Column {
-                Text("专注当下，", color = Color(0xFF496987), fontSize = 18.sp, fontFamily = miraHandFont)
-                Text("每天都有进步！  ☺", color = Color(0xFF496987), fontSize = 18.sp, fontFamily = miraHandFont)
-            }
-        }
-        Surface(
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = 178.dp).rotate(-7f),
-            color = Color(0xFFFFF2B8),
-            shape = RoundedCornerShape(4.dp),
-            shadowElevation = 2.dp,
-        ) {
-            Text("⭐ 加油！\n   你可以的！", Modifier.padding(horizontal = 18.dp, vertical = 9.dp), color = Color(0xFF29476E), fontFamily = miraHandFont, fontSize = 17.sp)
-        }
-        Image(
-            painterResource(R.drawable.mira_backpack_books),
-            contentDescription = null,
-            modifier = Modifier.align(Alignment.BottomEnd).width(180.dp).height(105.dp),
-            contentScale = ContentScale.Fit,
+        PageTitleBlock(
+            screen = AppScreen.DICTIONARY,
+            navigationStyle = navigationStyle,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 30.dp),
         )
+        Column(Modifier.align(Alignment.CenterEnd).padding(end = 34.dp), horizontalAlignment = Alignment.End) {
+            Text("汉字有力量", color = Color(0xFF496991), fontFamily = miraHandFont, fontSize = 18.sp)
+            Text("让世界更美好！  ✈", color = Color(0xFF496991), fontFamily = miraHandFont, fontSize = 18.sp)
+        }
+    }
+}
+
+@Composable
+private fun ScheduleHeroHeader(navigationStyle: NavigationStyle) {
+    Box(
+        Modifier.fillMaxWidth().height(112.dp)
+            .background(Brush.horizontalGradient(listOf(Color(0xFFD8F1FF).copy(alpha = 0.50f), Color(0xFFF7FCFF).copy(alpha = 0.28f), Color(0xFFDDF3FF).copy(alpha = 0.45f))))
+            .clipToBounds(),
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val cloud = Color.White.copy(alpha = 0.68f)
+            drawCircle(cloud, size.height * 0.34f, Offset(size.width * 0.28f, size.height * 0.67f))
+            drawCircle(cloud, size.height * 0.25f, Offset(size.width * 0.34f, size.height * 0.54f))
+            val route = Path().apply {
+                moveTo(size.width * 0.60f, size.height * 0.52f)
+                quadraticTo(size.width * 0.68f, size.height * 0.18f, size.width * 0.76f, size.height * 0.52f)
+                quadraticTo(size.width * 0.83f, size.height * 0.82f, size.width * 0.91f, size.height * 0.37f)
+            }
+            drawPath(route, Color(0xFF90B5DA), style = Stroke(3f, cap = StrokeCap.Round))
+        }
+        PageTitleBlock(
+            screen = AppScreen.SCHEDULE,
+            navigationStyle = navigationStyle,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 30.dp),
+        )
+        Text(
+            "每一节课\n都是成长的机会！",
+            modifier = Modifier.align(Alignment.Center).offset(x = 90.dp),
+            color = Color(0xFF6485AA),
+            fontFamily = miraHandFont,
+            fontSize = 17.sp,
+            lineHeight = 22.sp,
+            textAlign = TextAlign.Center,
+        )
+        Text("✈  ★", modifier = Modifier.align(Alignment.CenterEnd).padding(end = 36.dp), color = Color(0xFF4776A7), fontSize = 34.sp)
+    }
+}
+
+@Composable
+private fun WeatherHeroHeader(navigationStyle: NavigationStyle) {
+    Box(
+        Modifier.fillMaxWidth().height(112.dp)
+            .background(Brush.horizontalGradient(listOf(Color(0xFFDDF4FF).copy(alpha = 0.48f), Color(0xFFF8FCFF).copy(alpha = 0.28f), Color(0xFFE7F8E6).copy(alpha = 0.46f))))
+            .clipToBounds(),
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            val hill = Path().apply {
+                moveTo(size.width * 0.78f, size.height)
+                quadraticTo(size.width * 0.86f, size.height * 0.35f, size.width * 0.92f, size.height)
+                quadraticTo(size.width * 0.96f, size.height * 0.52f, size.width, size.height * 0.82f)
+                lineTo(size.width, size.height)
+                close()
+            }
+            drawPath(hill, Color(0xFFB7E6A5))
+            drawCircle(Color(0xFFFFCC35), size.height * 0.08f, Offset(size.width * 0.13f, size.height * 0.34f))
+            repeat(3) { index ->
+                drawLine(
+                    Color(0xFFFFC327),
+                    Offset(size.width * (0.16f + index * 0.012f), size.height * (0.18f + index * 0.12f)),
+                    Offset(size.width * (0.17f + index * 0.012f), size.height * (0.11f + index * 0.12f)),
+                    strokeWidth = 5f,
+                    cap = StrokeCap.Round,
+                )
+            }
+        }
+        PageTitleBlock(
+            screen = AppScreen.WEATHER,
+            navigationStyle = navigationStyle,
+            modifier = Modifier.align(Alignment.CenterStart).padding(start = 30.dp),
+        )
+        Column(Modifier.align(Alignment.CenterEnd).padding(end = 54.dp), horizontalAlignment = Alignment.End) {
+            Text("每天都是", color = Color(0xFF486A92), fontFamily = miraHandFont, fontSize = 17.sp)
+            Text("更棒的一天！  ★", color = Color(0xFF486A92), fontFamily = miraHandFont, fontSize = 18.sp)
+        }
     }
 }
 
 @Composable
 private fun TabletNavigation(selected: AppScreen, style: NavigationStyle, onSelected: (AppScreen) -> Unit) {
-    val panelColors = when (style) {
-        NavigationStyle.FRESH -> listOf(Color(0xFFF2F9FF), Color(0xFFE8F5FF))
-        NavigationStyle.COLORFUL -> listOf(Color.White, Color(0xFFFFF8EE))
-        NavigationStyle.JOURNAL -> listOf(Color(0xFFFFFCF3), Color(0xFFF2F8E9))
-        NavigationStyle.MINIMAL -> listOf(Color(0xFFF8FAFD), Color(0xFFF0F4F9))
-        NavigationStyle.STATIONERY -> listOf(Color(0xFFFBFEFF), Color(0xFFEAF7FF))
-    }
     Column(
         modifier = Modifier
             .width(132.dp)
             .fillMaxHeight()
-            .background(Brush.verticalGradient(panelColors))
             .padding(horizontal = 11.dp, vertical = 15.dp),
     ) {
         screenItems.forEach { item ->
@@ -422,69 +798,39 @@ private fun TabletNavigation(selected: AppScreen, style: NavigationStyle, onSele
                 else -> Color(0xFF3E8FF3)
             }
             val selectedBackground = when (style) {
-                NavigationStyle.FRESH -> accent
+                NavigationStyle.FRESH -> Color.White.copy(alpha = 0.74f)
                 NavigationStyle.COLORFUL -> accent.copy(alpha = 0.16f)
-                NavigationStyle.JOURNAL -> Color(0xFFFFE9A8)
-                NavigationStyle.MINIMAL -> Color.White
-                NavigationStyle.STATIONERY -> Color(0xFF438FF4)
+                NavigationStyle.JOURNAL -> Color(0xFFFFE9A8).copy(alpha = 0.68f)
+                NavigationStyle.MINIMAL -> Color.White.copy(alpha = 0.78f)
+                NavigationStyle.STATIONERY -> Color(0xFF438FF4).copy(alpha = 0.16f)
             }
-            val contentColor = when {
-                !isSelected -> when (style) {
-                    NavigationStyle.JOURNAL -> Color(0xFF53715C)
-                    NavigationStyle.MINIMAL -> Color(0xFF66758A)
-                    NavigationStyle.STATIONERY -> Color(0xFF29476E)
-                    else -> Color(0xFF647EA5)
-                }
-                style == NavigationStyle.FRESH || style == NavigationStyle.STATIONERY -> Color.White
-                else -> accent
-            }
+            val contentColor = if (style == NavigationStyle.JOURNAL) Color(0xFF43604C) else Color(0xFF29476E)
             Surface(
                 onClick = { onSelected(item) },
                 modifier = Modifier.fillMaxWidth().height(56.dp),
                 shape = RoundedCornerShape(if (style == NavigationStyle.JOURNAL) 7.dp else 13.dp),
                 color = if (isSelected) selectedBackground else Color.Transparent,
-                shadowElevation = if (isSelected && (style == NavigationStyle.FRESH || style == NavigationStyle.MINIMAL)) 2.dp else 0.dp,
+                shadowElevation = if (isSelected && style == NavigationStyle.MINIMAL) 1.dp else 0.dp,
             ) {
                 Row(
                     modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(Modifier.width(27.dp), contentAlignment = Alignment.Center) {
-                        NavigationStyleIcon(style, item, isSelected, accent, contentColor)
+                    Box(Modifier.width(30.dp), contentAlignment = Alignment.Center) {
+                        NavigationStyleIcon(style, item, Modifier.size(28.dp))
                     }
-                    Spacer(Modifier.width(8.dp))
+                    Spacer(Modifier.width(6.dp))
                     Text(
                         item.label,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                         color = if (isSelected) contentColor else if (style == NavigationStyle.JOURNAL) Color(0xFF43604C) else Color(0xFF29476E),
                         fontFamily = if (style == NavigationStyle.JOURNAL) miraHandFont else FontFamily.Default,
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
                         maxLines = 1,
                     )
                 }
             }
             Spacer(Modifier.height(13.dp))
-        }
-        Spacer(Modifier.weight(1f))
-        Box(Modifier.fillMaxWidth().height(156.dp)) {
-            Image(
-                painterResource(R.drawable.mira_green_hills),
-                contentDescription = null,
-                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(86.dp),
-                contentScale = ContentScale.Crop,
-            )
-            Surface(
-                color = Color(0xFFEAF7D8),
-                shape = RoundedCornerShape(5.dp),
-                shadowElevation = 1.dp,
-                modifier = Modifier.align(Alignment.Center).rotate(-7f),
-            ) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("每天", color = Color(0xFF54718A), fontFamily = miraHandFont, fontSize = 17.sp)
-                    Text("进步一点点", color = Color(0xFF54718A), fontFamily = miraHandFont, fontSize = 17.sp)
-                    Icon(Icons.Rounded.Star, null, tint = Color(0xFFFFC52D), modifier = Modifier.size(19.dp))
-                }
-            }
         }
     }
 }
@@ -493,45 +839,14 @@ private fun TabletNavigation(selected: AppScreen, style: NavigationStyle, onSele
 private fun NavigationStyleIcon(
     style: NavigationStyle,
     item: AppScreen,
-    selected: Boolean,
-    accent: Color,
-    contentColor: Color,
+    modifier: Modifier = Modifier.size(28.dp),
 ) {
-    when (style) {
-        NavigationStyle.FRESH -> {
-            if (item == AppScreen.TIMER) {
-                NavigationClockIcon(circleColor = contentColor, handColor = if (selected) accent else Color.White)
-            } else {
-                Icon(screenIcon(item), null, tint = contentColor, modifier = Modifier.size(24.dp))
-            }
-        }
-        NavigationStyle.COLORFUL -> {
-            val emoji = when (item) {
-                AppScreen.HOME -> "🏠"; AppScreen.TIMER -> "⏱"; AppScreen.DICTIONARY -> "📖"
-                AppScreen.SCHEDULE -> "📅"; AppScreen.WEATHER -> "🌤"; AppScreen.SETTINGS -> "⚙️"
-            }
-            Text(emoji, fontSize = 21.sp, textAlign = TextAlign.Center)
-        }
-        NavigationStyle.JOURNAL -> {
-            val symbol = when (item) {
-                AppScreen.HOME -> "⌂"; AppScreen.TIMER -> "◷"; AppScreen.DICTIONARY -> "书"
-                AppScreen.SCHEDULE -> "日"; AppScreen.WEATHER -> "☀"; AppScreen.SETTINGS -> "⚙"
-            }
-            Text(symbol, color = contentColor, fontFamily = miraHandFont, fontSize = 24.sp, textAlign = TextAlign.Center)
-        }
-        NavigationStyle.MINIMAL -> Icon(screenIcon(item), null, tint = contentColor, modifier = Modifier.size(21.dp))
-        NavigationStyle.STATIONERY -> {
-            if (selected) {
-                Surface(color = Color.White, shape = CircleShape, modifier = Modifier.size(31.dp)) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(screenIcon(item), null, tint = accent, modifier = Modifier.size(20.dp))
-                    }
-                }
-            } else {
-                Icon(screenIcon(item), null, tint = screenAccent(item), modifier = Modifier.size(25.dp))
-            }
-        }
-    }
+    Image(
+        painter = painterResource(navigationIconResource(style, item)),
+        contentDescription = item.label,
+        modifier = modifier,
+        contentScale = ContentScale.Fit,
+    )
 }
 
 @Composable
@@ -565,16 +880,29 @@ private fun ScreenContent(
     dictionaryQuery: String,
     navigationStyle: NavigationStyle,
     onNavigationStyleChanged: (NavigationStyle) -> Unit,
+    voiceWakeEnabled: Boolean,
+    voiceWakeStatus: String,
+    onVoiceWakeEnabledChanged: (Boolean) -> Unit,
+    onManualVoiceSessionChanged: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxSize().padding(start = 22.dp, end = 24.dp, bottom = 22.dp)) {
         when (screen) {
-            AppScreen.HOME -> HomeScreen(onNavigate, onOpenDictionary)
-            AppScreen.TIMER -> TimerScreen(onOpenSettings = { onNavigate(AppScreen.SETTINGS) })
-            AppScreen.DICTIONARY -> DictionaryScreen(initialQuery = dictionaryQuery)
+            AppScreen.HOME -> HomeScreen(onNavigate, onOpenDictionary, onManualVoiceSessionChanged, navigationStyle)
+            AppScreen.TIMER -> TimerScreen(
+                navigationStyle = navigationStyle,
+                onOpenSettings = { onNavigate(AppScreen.SETTINGS) },
+            )
+            AppScreen.DICTIONARY -> DictionaryScreen(initialQuery = dictionaryQuery, onVoiceSessionChanged = onManualVoiceSessionChanged)
             AppScreen.SCHEDULE -> ScheduleScreen()
             AppScreen.WEATHER -> WeatherScreen()
-            AppScreen.SETTINGS -> SettingsScreen(navigationStyle, onNavigationStyleChanged)
+            AppScreen.SETTINGS -> SettingsScreen(
+                navigationStyle = navigationStyle,
+                onNavigationStyleChanged = onNavigationStyleChanged,
+                voiceWakeEnabled = voiceWakeEnabled,
+                voiceWakeStatus = voiceWakeStatus,
+                onVoiceWakeEnabledChanged = onVoiceWakeEnabledChanged,
+            )
         }
     }
 }
@@ -585,7 +913,7 @@ private fun MiraCard(
     onClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    val colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFEFC))
+    val colors = CardDefaults.cardColors(containerColor = Color(0xFFFFFEFC).copy(alpha = 0.93f))
     val elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     if (onClick != null) {
         Card(onClick = onClick, modifier = modifier, shape = cardShape, colors = colors, elevation = elevation) {
@@ -606,7 +934,12 @@ private fun SectionTitle(symbol: String, title: String, color: Color = MiraBlue)
 }
 
 @Composable
-private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (String) -> Unit) {
+private fun HomeScreen(
+    onNavigate: (AppScreen) -> Unit,
+    onOpenDictionary: (String) -> Unit,
+    onVoiceSessionChanged: (Boolean) -> Unit,
+    navigationStyle: NavigationStyle,
+) {
     val context = LocalContext.current
     val todayIndex = LocalDate.now().dayOfWeek.value - 1
     val store = remember { LocalStore(context) }
@@ -616,7 +949,6 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
         store.loadLessons().filter { it.day == previewDay }.sortedBy { it.period }
     }
     val homeSnapshot = remember { store.loadTimer() }
-    val expectedMinutes = homeSnapshot.expectedMinutes
     val focusRecords = remember { store.loadFocusRecords() }
     val weekStart = remember { LocalDate.now().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) }
     val completedWeekDays = remember(focusRecords, weekStart) {
@@ -627,6 +959,12 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
     }
 
     var selectedSubject by rememberSaveable { mutableStateOf(homeSnapshot.subject.ifBlank { "语文" }) }
+    var expectedMinutes by rememberSaveable {
+        mutableIntStateOf(
+            if (homeSnapshot.running || homeSnapshot.elapsedSeconds > 0) homeSnapshot.expectedMinutes
+            else store.loadExpectedMinutes(homeSnapshot.subject.ifBlank { "语文" }),
+        )
+    }
     val restoredHomeElapsed = homeSnapshot.elapsedSeconds + if (homeSnapshot.running && homeSnapshot.startedAtMillis > 0L) {
         ((System.currentTimeMillis() - homeSnapshot.startedAtMillis) / 1000).toInt().coerceAtLeast(0)
     } else 0
@@ -660,8 +998,16 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
     }
     fun selectHomeSubject(subject: String) {
         if (homeTimerRunning) return
+        val subjectExpectedMinutes = store.loadExpectedMinutes(subject)
         selectedSubject = subject
-        store.saveTimer(store.loadTimer().copy(taskName = "${subject}作业", subject = subject))
+        expectedMinutes = subjectExpectedMinutes
+        store.saveTimer(
+            store.loadTimer().copy(
+                taskName = "${subject}作业",
+                subject = subject,
+                expectedMinutes = subjectExpectedMinutes,
+            ),
+        )
     }
     fun toggleHomeTimer() {
         if (homeTimerRunning) {
@@ -692,15 +1038,7 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
         }
     }
 
-    val dictionaryRepository = remember { DictionaryRepository(context.applicationContext) }
     var homeQuery by rememberSaveable { mutableStateOf("") }
-    var homeEntry by remember { mutableStateOf<DictionaryEntry?>(null) }
-    LaunchedEffect(homeQuery) {
-        val target = if (homeQuery.isBlank()) "智" else extractDictionaryQuery(homeQuery)
-        homeEntry = withContext(Dispatchers.IO) {
-            dictionaryRepository.findExact(target) ?: dictionaryRepository.search(target, 1).firstOrNull()
-        }
-    }
 
     var showVoiceOverlay by remember { mutableStateOf(false) }
     var voiceListening by remember { mutableStateOf(false) }
@@ -719,6 +1057,7 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
             override fun onEndOfSpeech() { voiceListening = false }
             override fun onError(error: Int) {
                 voiceListening = false
+                onVoiceSessionChanged(false)
                 voiceError = when (error) {
                     SpeechRecognizer.ERROR_NO_MATCH -> "没有听清，再说一次吧"
                     SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有听到声音，再试一次吧"
@@ -728,6 +1067,7 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
             }
             override fun onResults(results: Bundle?) {
                 voiceListening = false
+                onVoiceSessionChanged(false)
                 val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                 if (spoken.isNotBlank()) {
                     voiceTranscript = spoken
@@ -745,18 +1085,29 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
             }
             override fun onEvent(eventType: Int, params: Bundle?) = Unit
         })
-        onDispose { speechRecognizer?.destroy() }
+        onDispose {
+            onVoiceSessionChanged(false)
+            speechRecognizer?.destroy()
+        }
     }
     fun startHomeVoiceSearch() {
+        onVoiceSessionChanged(true)
         showVoiceOverlay = true
         voiceTranscript = ""
         voiceError = null
         if (speechRecognizer == null) {
+            onVoiceSessionChanged(false)
             voiceError = "设备暂不支持语音识别"
             return
         }
         voiceListening = true
-        speechRecognizer.startListening(dictionarySpeechIntent().putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
+        runCatching {
+            speechRecognizer.startListening(dictionarySpeechIntent().putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
+        }.onFailure {
+            voiceListening = false
+            onVoiceSessionChanged(false)
+            voiceError = "语音识别暂时无法启动"
+        }
     }
     val homeMicrophonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startHomeVoiceSearch() else {
@@ -776,6 +1127,7 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
     var weatherRefreshRequest by remember { mutableIntStateOf(0) }
     val initialWeatherCache = remember { store.loadWeatherCache() }
     var locatedWeather by remember { mutableStateOf(initialWeatherCache?.weather) }
+    var homeTodayForecast by remember { mutableStateOf<DailyWeather?>(null) }
     var weatherLoading by remember { mutableStateOf(false) }
     var weatherError by remember { mutableStateOf<String?>(null) }
     val locationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -797,18 +1149,24 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
             val cache = store.loadWeatherCache()
             val refreshMillis = store.loadWeatherRefreshMinutes() * 60_000L
             val isFresh = cache != null && System.currentTimeMillis() - cache.updatedAtMillis < refreshMillis
-            if (isFresh && weatherRefreshRequest == 0) {
-                locatedWeather = cache.weather
-                return@LaunchedEffect
-            }
+            if (isFresh && weatherRefreshRequest == 0) locatedWeather = cache.weather
             weatherLoading = true
             weatherError = null
-            runCatching { withContext(Dispatchers.IO) { DeviceWeatherRepository.load(context.applicationContext) } }
-                .onSuccess {
-                    locatedWeather = it
-                    store.saveWeatherCache(WeatherCache(it, System.currentTimeMillis()))
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val city = DeviceWeatherRepository.locate(context.applicationContext)
+                    city to WeatherRepository.loadReport(city)
                 }
-                .onFailure { weatherError = it.message ?: "天气获取失败" }
+            }
+                .onSuccess { (city, report) ->
+                    val weather = LocatedWeather(city.name, report.current)
+                    locatedWeather = weather
+                    homeTodayForecast = report.daily.firstOrNull()
+                    store.saveWeatherCache(WeatherCache(weather, System.currentTimeMillis()))
+                }
+                .onFailure {
+                    if (locatedWeather == null) weatherError = it.message ?: "天气获取失败"
+                }
             weatherLoading = false
         }
     }
@@ -819,93 +1177,89 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
             Box(
                 Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFFFF7DD), Color(0xFFFFFDF7)))),
             ) {
-                Image(
-                    painterResource(R.drawable.mira_green_hills),
-                    contentDescription = null,
-                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(92.dp).alpha(0.72f),
-                    contentScale = ContentScale.Crop,
-                )
                 Column(
-                    Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 20.dp),
+                    Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 20.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        HomeTimerBadge()
+                        NavigationStyleIcon(navigationStyle, AppScreen.TIMER, Modifier.size(58.dp).offset(y = (-5).dp))
                         Spacer(Modifier.width(12.dp))
                         Column {
-                            Text("作业计时", color = MiraNavy, fontSize = 27.sp, fontWeight = FontWeight.Black)
+                            Text("作业计时", color = MiraNavy, fontSize = 26.sp, fontWeight = FontWeight.Black)
                             Text("专注学习，高效完成作业", color = Color(0xFF67738A), fontSize = 14.sp)
                         }
                     }
-                    Spacer(Modifier.weight(0.3f))
-                    Surface(
-                        modifier = Modifier.size(205.dp),
-                        shape = CircleShape,
-                        color = Color(0xFFFFFEFA),
-                        border = androidx.compose.foundation.BorderStroke(12.dp, Color(0xFFFFEDB5)),
+                    Column(
+                        modifier = Modifier.fillMaxWidth().weight(1f),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                            Text(if (homeTimerRunning) "正在专注" else "从零开始", color = Color(0xFF62708A), fontSize = 18.sp)
-                            Text(formatTimer(homeElapsedSeconds), color = Color(0xFF122F62), fontSize = 50.sp, fontWeight = FontWeight.Black)
-                            Text("预计 $expectedMinutes 分钟", color = Color(0xFF62708A), fontSize = 16.sp)
+                        Surface(
+                            modifier = Modifier.size(205.dp),
+                            shape = CircleShape,
+                            color = Color(0xFFFFFEFA),
+                            border = androidx.compose.foundation.BorderStroke(12.dp, Color(0xFFFFEDB5)),
+                        ) {
+                            Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                if (homeTimerRunning) {
+                                    Text("正在专注", color = Color(0xFF62708A), fontSize = 18.sp)
+                                }
+                                Text(formatTimer(homeElapsedSeconds), color = Color(0xFF122F62), fontSize = 50.sp, fontWeight = FontWeight.Black)
+                                Text("预计 $expectedMinutes 分钟", color = Color(0xFF62708A), fontSize = 16.sp)
+                            }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            listOf("语文", "数学", "英语").forEachIndexed { index, item ->
+                                HomeSubjectButton(
+                                    subject = item,
+                                    selected = selectedSubject == item,
+                                    color = listOf(Color(0xFFFF8B7E), Color(0xFF5B9CF1), Color(0xFF55BE7C))[index],
+                                    onClick = { selectHomeSubject(item) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = { toggleHomeTimer() },
+                            modifier = Modifier.fillMaxWidth().height(54.dp),
+                            shape = RoundedCornerShape(28.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (homeTimerRunning) Color(0xFFE85F59) else Color(0xFFFFB91D),
+                            ),
+                        ) {
+                            Icon(if (homeTimerRunning) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, modifier = Modifier.size(30.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(if (homeTimerRunning) "暂停计时" else "开始计时", fontSize = 23.sp, fontWeight = FontWeight.Bold)
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Text("选择学科", color = Color(0xFF7A6A4C), fontSize = 13.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        listOf("语文", "数学", "英语").forEachIndexed { index, item ->
-                            HomeSubjectButton(
-                                subject = item,
-                                selected = selectedSubject == item,
-                                color = listOf(Color(0xFFFF8B7E), Color(0xFF5B9CF1), Color(0xFF55BE7C))[index],
-                                onClick = { selectHomeSubject(item) },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(9.dp))
-                    Button(
-                        onClick = { toggleHomeTimer() },
-                        modifier = Modifier.fillMaxWidth().height(54.dp),
-                        shape = RoundedCornerShape(28.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFB91D)),
-                    ) {
-                        Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(30.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (homeTimerRunning) "暂停计时" else "开始计时", fontSize = 23.sp, fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.height(20.dp))
-                    Text("专注的你，真的了不起！  ★", color = Color(0xFF54708E), fontSize = 16.sp)
                 }
             }
         }
 
         Column(Modifier.weight(1.05f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            MiraCard(Modifier.fillMaxWidth().weight(1.35f)) {
+            MiraCard(Modifier.fillMaxWidth().weight(0.78f)) {
                 Column(
-                    Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFE7FAF1), Color(0xFFF8FFFB)))).padding(20.dp),
+                    Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFE7FAF1), Color(0xFFF8FFFB))))
+                        .padding(20.dp),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(color = Color(0xFF39BE82), shape = CircleShape) {
-                            Icon(Icons.AutoMirrored.Rounded.MenuBook, null, tint = Color.White, modifier = Modifier.padding(12.dp).size(32.dp))
-                        }
+                        NavigationStyleIcon(navigationStyle, AppScreen.DICTIONARY, Modifier.size(58.dp).offset(y = (-7).dp))
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text("查字典", color = MiraNavy, fontSize = 26.sp, fontWeight = FontWeight.Black)
                             Text("认识汉字，探索更大的世界", color = Color(0xFF60748B), fontSize = 14.sp)
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(
                             value = homeQuery,
                             onValueChange = { homeQuery = it },
-                            modifier = Modifier.weight(1f).height(52.dp),
-                            placeholder = { Text("请输入要查询的汉字", color = Color(0xFF8B97AB), fontSize = 15.sp) },
-                            leadingIcon = { Icon(Icons.Rounded.Search, null, tint = Color(0xFF8090A8), modifier = Modifier.size(23.dp)) },
+                            modifier = Modifier.weight(1f).height(56.dp),
+                            placeholder = { Text("请输入要查询的汉字", color = Color(0xFF8B97AB), fontSize = 14.sp) },
+                            leadingIcon = { Icon(Icons.Rounded.Search, null, tint = Color(0xFF8090A8), modifier = Modifier.size(22.dp)) },
                             singleLine = true,
-                            shape = RoundedCornerShape(26.dp),
+                            shape = RoundedCornerShape(28.dp),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedContainerColor = Color.White,
                                 unfocusedContainerColor = Color.White,
@@ -918,49 +1272,29 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
                             Icon(Icons.Rounded.Mic, "语音查字", tint = Color.White, modifier = Modifier.padding(12.dp).size(24.dp))
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Surface(color = Color.White.copy(alpha = 0.72f), shape = RoundedCornerShape(18.dp), modifier = Modifier.fillMaxSize()) {
-                        Column(Modifier.padding(14.dp)) {
-                            Text("今日推荐汉字", color = Color(0xFF315A73), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.height(8.dp))
-                            Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-                                HomeCharacterTile(homeEntry?.word ?: "智", Modifier.size(114.dp))
-                                Spacer(Modifier.width(16.dp))
-                                Column(Modifier.weight(1f)) {
-                                    Row(verticalAlignment = Alignment.Bottom) {
-                                        Text(homeEntry?.word ?: "智", color = MiraNavy, fontSize = 32.sp, fontFamily = miraKaiFont)
-                                        Text("  ${homeEntry?.pinyin ?: "zhì"}", color = Color(0xFF71809A), fontSize = 18.sp)
-                                    }
-                                    Text(homeEntry?.meanings?.firstOrNull() ?: "有智慧，能明辨事理。", color = Color(0xFF5C718C), fontSize = 15.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    Surface(color = Color(0xFFEFF9F1), shape = RoundedCornerShape(15.dp), modifier = Modifier.padding(top = 8.dp)) {
-                                        Text("“智者不惑，勤学多思。”", Modifier.padding(horizontal = 12.dp, vertical = 8.dp), color = Color(0xFF466B68), fontSize = 13.sp)
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
-            MiraCard(Modifier.fillMaxWidth().weight(0.65f)) {
-                Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
+            MiraCard(Modifier.fillMaxWidth().weight(0.80f)) {
+                DailySentencePanel()
+            }
+            MiraCard(Modifier.fillMaxWidth().weight(0.42f)) {
+                Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.Star, null, tint = Color(0xFFFFC329), modifier = Modifier.size(30.dp))
-                        Spacer(Modifier.width(9.dp))
-                        Text("本周学习进度", color = MiraNavy, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                        StudyProgressStar(completed = true, modifier = Modifier.size(24.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("本周学习进度", color = MiraNavy, fontSize = 16.sp, fontWeight = FontWeight.Black)
                         Spacer(Modifier.weight(1f))
-                        Text("点亮星星，见证成长！", color = Color(0xFF8090A8), fontSize = 12.sp)
+                        Text("点亮星星，见证成长！", color = Color(0xFF8090A8), fontSize = 10.sp)
                     }
                     Spacer(Modifier.weight(1f))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                         listOf("周一", "周二", "周三", "周四", "周五").forEachIndexed { index, label ->
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    Icons.Rounded.Star,
-                                    null,
-                                    tint = if (index + 1 in completedWeekDays) Color(0xFFFFBF22) else Color(0xFFC9D2DF),
-                                    modifier = Modifier.size(39.dp),
+                                StudyProgressStar(
+                                    completed = index + 1 in completedWeekDays,
+                                    modifier = Modifier.size(30.dp),
                                 )
-                                Text(label, color = Color(0xFF68758C), fontSize = 12.sp)
+                                Text(label, color = Color(0xFF68758C), fontSize = 10.sp)
                             }
                         }
                     }
@@ -969,15 +1303,13 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
         }
 
         Column(Modifier.weight(1.08f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            MiraCard(Modifier.fillMaxWidth().weight(1.25f), onClick = { onNavigate(AppScreen.SCHEDULE) }) {
+            MiraCard(Modifier.fillMaxWidth().weight(1.5f), onClick = { onNavigate(AppScreen.SCHEDULE) }) {
                 Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF1F8FF), Color.White))).padding(20.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Surface(color = Color(0xFF4C9AF0), shape = CircleShape) {
-                            Icon(Icons.Rounded.CalendarMonth, null, tint = Color.White, modifier = Modifier.padding(12.dp).size(32.dp))
-                        }
+                        NavigationStyleIcon(navigationStyle, AppScreen.SCHEDULE, Modifier.size(58.dp))
                         Spacer(Modifier.width(12.dp))
                         Column {
-                            Text(if (isWeekend) "下次课程" else "今日课程", color = MiraNavy, fontSize = 25.sp, fontWeight = FontWeight.Black)
+                            Text("课程表", color = MiraNavy, fontSize = 26.sp, fontWeight = FontWeight.Black)
                             Text(if (isWeekend) "周一课程，提前做好准备" else "好好上课，收获新知识", color = Color(0xFF60748B), fontSize = 14.sp)
                         }
                         Spacer(Modifier.weight(1f))
@@ -986,56 +1318,101 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
                             Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Color(0xFF458FE6), modifier = Modifier.size(18.dp))
                         }
                     }
-                    Spacer(Modifier.height(7.dp))
-                    (1..7).forEach { period ->
-                        HomeLessonRow(period, todayLessons.firstOrNull { it.period == period })
+                    Spacer(Modifier.height(10.dp))
+                    Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Column(
+                            Modifier.weight(1f).fillMaxHeight(),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("上午", color = Color(0xFF5F7693), fontSize = 12.sp, fontWeight = FontWeight.Black)
+                            (1..4).forEach { period ->
+                                HomeLessonRow(
+                                    period,
+                                    todayLessons.firstOrNull { it.period == period },
+                                    Modifier.weight(1f),
+                                )
+                            }
+                        }
+                        Column(
+                            Modifier.weight(1f).fillMaxHeight(),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Text("下午", color = Color(0xFF5F7693), fontSize = 12.sp, fontWeight = FontWeight.Black)
+                            (5..7).forEach { period ->
+                                HomeLessonRow(
+                                    period,
+                                    todayLessons.firstOrNull { it.period == period },
+                                    Modifier.weight(1f),
+                                )
+                            }
+                            Spacer(Modifier.weight(1f))
+                        }
                     }
                 }
             }
-            MiraCard(Modifier.fillMaxWidth().weight(0.75f)) {
+            MiraCard(Modifier.fillMaxWidth().weight(0.5f)) {
                 Box(
                     Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFBFE6FF), Color(0xFFEAF8FF)))),
                 ) {
-                    Image(
-                        painterResource(R.drawable.mira_green_hills), contentDescription = null,
-                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(58.dp).alpha(0.62f), contentScale = ContentScale.Crop,
-                    )
-                    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp)) {
+                    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 11.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Image(
+                                painterResource(weatherIconResource(locatedWeather?.info?.weatherCode ?: 1)),
+                                contentDescription = null,
+                                modifier = Modifier.size(24.dp),
+                            )
+                            Spacer(Modifier.width(7.dp))
+                            Text("天气", color = MiraNavy, fontSize = 17.sp, fontWeight = FontWeight.Black)
+                            Spacer(Modifier.weight(1f))
+                            Text("今日温度", color = Color(0xFF66809E), fontSize = 10.sp)
+                        }
+                        Spacer(Modifier.height(2.dp))
                         when {
                             !hasLocationPermission -> {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Rounded.LocationOn, null, tint = Color(0xFF4E94E8), modifier = Modifier.size(25.dp))
-                                    Spacer(Modifier.width(7.dp))
-                                    Text("当前位置天气", color = MiraNavy, fontSize = 20.sp, fontFamily = miraDisplayFont)
+                                Row(Modifier.fillMaxWidth().weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Rounded.LocationOn, null, tint = Color(0xFF4E94E8), modifier = Modifier.size(20.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("开启定位后显示实时天气", color = Color(0xFF536B89), fontSize = 11.sp)
+                                    Spacer(Modifier.weight(1f))
+                                    TextButton(onClick = {
+                                        locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+                                    }) { Text("开启定位", fontSize = 12.sp) }
                                 }
-                                Spacer(Modifier.weight(1f))
-                                Text("开启定位后显示身边的实时天气", color = Color(0xFF536B89), fontSize = 14.sp)
-                                OutlinedButton(onClick = {
-                                    locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
-                                }) { Text("开启定位") }
                             }
                             weatherLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("正在获取当前位置天气…", color = Color(0xFF536B89)) }
                             locatedWeather != null -> {
                                 val weather = locatedWeather!!
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(weather.placeName, color = MiraNavy, fontSize = 22.sp, fontWeight = FontWeight.Black)
-                                    Text("  ·  ${weather.info.description}", color = Color(0xFF536B89), fontSize = 14.sp)
-                                    Spacer(Modifier.weight(1f))
-                                    HomeWeatherIcon()
+                                Row(Modifier.fillMaxWidth().weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(weather.placeName, color = MiraNavy, fontSize = 14.sp, fontWeight = FontWeight.Black)
+                                            Text("  ·  ${weather.info.description}", color = Color(0xFF536B89), fontSize = 11.sp)
+                                        }
+                                        Text(
+                                            "湿度 ${weather.info.humidity}%  ·  风速 ${weather.info.windSpeed.toInt()} km/h",
+                                            color = Color(0xFF526C8D),
+                                            fontSize = 10.sp,
+                                        )
+                                    }
+                                    Row(verticalAlignment = Alignment.Bottom) {
+                                        Text("${weather.info.temperature.toInt()}℃", color = Color(0xFF102E61), fontSize = 31.sp, fontWeight = FontWeight.Black)
+                                        Spacer(Modifier.width(7.dp))
+                                        Text(
+                                            homeTodayForecast?.let { "${it.minTemperature.toInt()}℃ ~ ${it.maxTemperature.toInt()}℃" } ?: "--℃ ~ --℃",
+                                            color = Color(0xFF315F8C),
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(bottom = 3.dp),
+                                        )
+                                    }
                                 }
-                                Spacer(Modifier.weight(1f))
-                                Text("${weather.info.temperature.toInt()}°C", color = Color(0xFF102E61), fontSize = 48.sp, fontWeight = FontWeight.Black)
-                                Text("湿度 ${weather.info.humidity}%  ·  风速 ${weather.info.windSpeed.toInt()} km/h", color = Color(0xFF526C8D), fontSize = 13.sp)
                             }
                             else -> {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Rounded.LocationOn, null, tint = Color(0xFF4E94E8), modifier = Modifier.size(25.dp))
-                                    Spacer(Modifier.width(7.dp))
-                                    Text("当前位置天气", color = MiraNavy, fontSize = 20.sp, fontFamily = miraDisplayFont)
+                                Row(Modifier.fillMaxWidth().weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(weatherError ?: "暂时无法获取天气", color = Color(0xFF536B89), fontSize = 11.sp)
+                                    Spacer(Modifier.weight(1f))
+                                    TextButton(onClick = { weatherRefreshRequest++ }) { Text("重新获取", fontSize = 12.sp) }
                                 }
-                                Spacer(Modifier.weight(1f))
-                                Text(weatherError ?: "暂时无法获取天气", color = Color(0xFF536B89), fontSize = 13.sp)
-                                TextButton(onClick = { weatherRefreshRequest++ }) { Text("重新获取") }
                             }
                         }
                     }
@@ -1053,10 +1430,12 @@ private fun HomeScreen(onNavigate: (AppScreen) -> Unit, onOpenDictionary: (Strin
                 onRetry = { startHomeVoiceSearch() },
                 onCancel = {
                     speechRecognizer?.cancel()
+                    onVoiceSessionChanged(false)
                     showVoiceOverlay = false
                     voiceListening = false
                 },
                 onComplete = {
+                    onVoiceSessionChanged(false)
                     if (voiceTranscript.isNotBlank()) {
                         val query = extractDictionaryQuery(voiceTranscript)
                         homeQuery = query
@@ -1160,73 +1539,106 @@ private fun HomeSubjectButton(
 }
 
 @Composable
-private fun HomeTimerBadge() {
+private fun StudyProgressStar(completed: Boolean, modifier: Modifier = Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        if (completed) {
+            Icon(Icons.Rounded.Star, null, tint = Color(0xFFFFC52E), modifier = Modifier.fillMaxSize())
+        } else {
+            Icon(Icons.Rounded.StarBorder, null, tint = Color(0xFFAEBBCD), modifier = Modifier.fillMaxSize())
+        }
+    }
+}
+
+private data class DailySentence(
+    val text: String,
+    val source: String,
+    val keywords: List<String>,
+)
+
+// Curated, child-friendly public-domain lines. Corpus reference:
+// https://github.com/chinese-poetry/chinese-poetry (MIT).
+private val dailySentences = listOf(
+    DailySentence("读书破万卷，下笔如有神。", "唐 · 杜甫", listOf("勤学", "积累")),
+    DailySentence("欲穷千里目，更上一层楼。", "唐 · 王之涣《登鹳雀楼》", listOf("进取", "成长")),
+    DailySentence("纸上得来终觉浅，绝知此事要躬行。", "宋 · 陆游《冬夜读书示子聿》", listOf("实践", "求知")),
+    DailySentence("学而时习之，不亦说乎？", "《论语 · 学而》", listOf("学习", "复习")),
+    DailySentence("不积跬步，无以至千里。", "《荀子 · 劝学》", listOf("坚持", "积累")),
+    DailySentence("少壮不努力，老大徒伤悲。", "汉乐府《长歌行》", listOf("勤奋", "惜时")),
+    DailySentence("会当凌绝顶，一览众山小。", "唐 · 杜甫《望岳》", listOf("勇气", "志向")),
+    DailySentence("山重水复疑无路，柳暗花明又一村。", "宋 · 陆游《游山西村》", listOf("希望", "坚持")),
+    DailySentence("海内存知己，天涯若比邻。", "唐 · 王勃《送杜少府之任蜀州》", listOf("友谊", "豁达")),
+    DailySentence("千里之行，始于足下。", "《道德经》", listOf("行动", "坚持")),
+)
+
+@Composable
+private fun DailySentencePanel() {
+    val sentence = dailySentences[(LocalDate.now().dayOfYear - 1) % dailySentences.size]
+    val displayText = remember(sentence.text) {
+        val separator = sentence.text.indexOf('，')
+        if (sentence.text.length >= 14 && separator in 4..(sentence.text.lastIndex - 4)) {
+            sentence.text.replaceFirst("，", "，\n")
+        } else sentence.text
+    }
     Box(
-        modifier = Modifier.size(62.dp).background(Color(0xFFFFD469), CircleShape),
-        contentAlignment = Alignment.Center,
+        Modifier.fillMaxSize()
+            .background(Brush.linearGradient(listOf(Color(0xFFFFFDF4), Color(0xFFF0FBF4))))
+            .padding(horizontal = 20.dp, vertical = 15.dp),
     ) {
-        Canvas(Modifier.size(45.dp)) {
-            drawCircle(Color(0xFFFFFBEC))
-            val ring = Stroke(width = 5f, cap = StrokeCap.Round)
-            drawArc(Color(0xFFF39A17), startAngle = -90f, sweepAngle = 360f, useCenter = false, style = ring)
-            drawCircle(Color(0xFFF39A17), radius = 3.2f, center = center)
-            drawLine(Color(0xFFF39A17), center, Offset(center.x, size.height * 0.24f), strokeWidth = 4f, cap = StrokeCap.Round)
-            drawLine(Color(0xFFF39A17), center, Offset(size.width * 0.72f, size.height * 0.62f), strokeWidth = 4f, cap = StrokeCap.Round)
+        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Image(
+                    painterResource(R.drawable.mira_home_daily_quote_v1),
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                )
+                Spacer(Modifier.width(9.dp))
+                Text("每日好句", color = Color(0xFF315A73), fontSize = 22.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.weight(1f))
+                Surface(color = Color(0xFFFFE7A8), shape = RoundedCornerShape(12.dp)) {
+                    Text(
+                        sentence.keywords.joinToString(" · "),
+                        Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                        color = Color(0xFF9B6710),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    "“$displayText”",
+                    color = MiraNavy,
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Black,
+                    lineHeight = 29.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                )
+            }
+            Text(sentence.source, color = Color(0xFF65758A), fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 
 @Composable
-private fun HomeWeatherIcon() {
-    Surface(color = Color(0xFF4C9AF0), shape = CircleShape, modifier = Modifier.size(52.dp)) {
-        Box(Modifier.fillMaxSize()) {
-            Icon(
-                Icons.Rounded.WbSunny,
-                null,
-                tint = Color(0xFFFFCF32),
-                modifier = Modifier.align(Alignment.TopStart).padding(start = 7.dp, top = 6.dp).size(25.dp),
-            )
-            Icon(
-                Icons.Rounded.Cloud,
-                null,
-                tint = Color.White,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 5.dp, bottom = 6.dp).size(32.dp),
-            )
-        }
-    }
-}
-
-@Composable
-private fun HomeCharacterTile(character: String, modifier: Modifier = Modifier) {
-    Box(modifier.background(Color(0xFFF9FFF9), RoundedCornerShape(12.dp)), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize()) {
-            val lineColor = Color(0xFF75D5A7).copy(alpha = 0.7f)
-            drawLine(lineColor, Offset(size.width / 2f, 0f), Offset(size.width / 2f, size.height), 2f)
-            drawLine(lineColor, Offset(0f, size.height / 2f), Offset(size.width, size.height / 2f), 2f)
-            drawLine(lineColor.copy(alpha = 0.35f), Offset.Zero, Offset(size.width, size.height), 1.5f)
-            drawLine(lineColor.copy(alpha = 0.35f), Offset(size.width, 0f), Offset(0f, size.height), 1.5f)
-        }
-        Text(
-            character,
-            color = Color(0xFF102650),
-            fontSize = 68.sp,
-            lineHeight = 68.sp,
-            fontFamily = miraHandFont,
-            textAlign = TextAlign.Center,
-        )
-    }
-}
-
-@Composable
-private fun HomeLessonRow(period: Int, lesson: Lesson?) {
+private fun HomeLessonRow(period: Int, lesson: Lesson?, modifier: Modifier = Modifier) {
     val colors = listOf(Color(0xFFFFE8E5), Color(0xFFE5F1FF), Color(0xFFE8F7E5), Color(0xFFFFF2CE))
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         color = if (lesson != null) colors[(period - 1).mod(colors.size)] else Color(0xFFF2F5F9),
         shape = RoundedCornerShape(10.dp),
     ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 1.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("第${period}节", color = if (lesson != null) MiraNavy else Color(0xFF8C99AC), fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.width(62.dp))
+        Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("第${period}节", color = if (lesson != null) MiraNavy else Color(0xFF8C99AC), fontWeight = FontWeight.Bold, fontSize = 12.sp, modifier = Modifier.width(48.dp))
+            if (lesson != null) {
+                Image(
+                    painterResource(scheduleLessonIcon(lesson.name)),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    contentScale = ContentScale.Fit,
+                )
+                Spacer(Modifier.width(7.dp))
+            }
             Text(
                 lesson?.name ?: "暂无课程",
                 color = if (lesson != null) MiraNavy else Color(0xFF9AA6B8),
@@ -1239,7 +1651,7 @@ private fun HomeLessonRow(period: Int, lesson: Lesson?) {
 }
 
 @Composable
-private fun TimerScreen(onOpenSettings: () -> Unit) {
+private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
     val store = remember { LocalStore(context) }
     val snapshot = remember { store.loadTimer() }
@@ -1247,9 +1659,16 @@ private fun TimerScreen(onOpenSettings: () -> Unit) {
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) Toast.makeText(context, "未开启通知权限，计时仍可使用，但后台结束时不会弹出提醒", Toast.LENGTH_LONG).show()
     }
-    var taskName by rememberSaveable { mutableStateOf(snapshot.taskName) }
-    var subject by rememberSaveable { mutableStateOf(snapshot.subject) }
-    var expectedMinutes by rememberSaveable { mutableIntStateOf(snapshot.expectedMinutes) }
+    val configuredSubjects = remember { store.loadHomeworkSubjects() }
+    var subject by rememberSaveable {
+        mutableStateOf(snapshot.subject.takeIf { it in configuredSubjects } ?: configuredSubjects.first())
+    }
+    var expectedMinutes by rememberSaveable {
+        mutableIntStateOf(
+            if (snapshot.running || snapshot.elapsedSeconds > 0) snapshot.expectedMinutes
+            else store.loadExpectedMinutes(snapshot.subject.takeIf { it in configuredSubjects } ?: configuredSubjects.first()),
+        )
+    }
     val restoredElapsed = snapshot.elapsedSeconds + if (snapshot.running && snapshot.startedAtMillis > 0L) {
         ((System.currentTimeMillis() - snapshot.startedAtMillis) / 1000).toInt().coerceAtLeast(0)
     } else 0
@@ -1268,7 +1687,7 @@ private fun TimerScreen(onOpenSettings: () -> Unit) {
     }
 
     fun saveCurrent() = store.saveTimer(
-        TimerSnapshot(taskName, subject, expectedMinutes, elapsedSeconds, running, startedAtMillis)
+        TimerSnapshot("${subject}作业", subject, expectedMinutes, elapsedSeconds, running, startedAtMillis)
     )
 
     fun toggleTimer() {
@@ -1286,7 +1705,7 @@ private fun TimerScreen(onOpenSettings: () -> Unit) {
             val secondsUntilExpected = expectedMinutes * 60 - elapsedSeconds
             if (secondsUntilExpected > 0) {
                 TimerAlarmScheduler.schedule(
-                    context, taskName.ifBlank { "专注作业" }, expectedMinutes,
+                    context, "${subject}作业", expectedMinutes,
                     System.currentTimeMillis() + secondsUntilExpected * 1000L,
                 )
             }
@@ -1315,7 +1734,7 @@ private fun TimerScreen(onOpenSettings: () -> Unit) {
         running = false
         startedAtMillis = 0L
         TimerAlarmScheduler.cancel(context)
-        store.addFocusRecord(FocusRecord(completedAt, taskName.ifBlank { "专注作业" }, subject, actualMinutes, completedAt))
+        store.addFocusRecord(FocusRecord(completedAt, "${subject}作业", subject, actualMinutes, completedAt))
         records.clear()
         records.addAll(store.loadFocusRecords())
         elapsedSeconds = 0
@@ -1327,123 +1746,149 @@ private fun TimerScreen(onOpenSettings: () -> Unit) {
         Column(Modifier.weight(0.93f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             MiraCard(Modifier.fillMaxWidth().weight(0.47f)) {
                 Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 17.dp)) {
-                    SectionTitle("📖", "本次作业", Color(0xFF2B75D6))
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(
-                        value = taskName,
-                        onValueChange = { taskName = it },
-                        modifier = Modifier.fillMaxWidth().height(58.dp),
-                        singleLine = true,
-                        trailingIcon = {
-                            androidx.compose.material3.IconButton(onClick = { taskName = "" }) {
-                                Icon(Icons.Rounded.Close, "清空", tint = Color(0xFF74839A))
-                            }
-                        },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color(0xFFFAFCFF),
-                            unfocusedContainerColor = Color(0xFFFAFCFF),
-                            focusedBorderColor = Color(0xFFCBD9E9),
-                            unfocusedBorderColor = Color(0xFFD9E1EB),
-                        ),
-                    )
-                    Spacer(Modifier.height(9.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        homeworkSubjects.forEach { item ->
-                            FilterChip(
+                    TimerSectionTitle(timerCurrentSectionIcon(navigationStyle), "科目选择")
+                    Spacer(Modifier.weight(1f))
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        configuredSubjects.forEach { item ->
+                            TimerSubjectCard(
+                                subject = item,
                                 selected = subject == item,
+                                enabled = !running,
                                 onClick = {
-                                    val oldSubject = subject
+                                    val subjectExpectedMinutes = store.loadExpectedMinutes(item)
                                     subject = item
-                                    if (taskName.isBlank() || taskName == "${oldSubject}作业") taskName = "${item}作业"
-                                    saveCurrent()
+                                    expectedMinutes = subjectExpectedMinutes
+                                    store.saveTimer(
+                                        TimerSnapshot(
+                                            "${item}作业",
+                                            item,
+                                            subjectExpectedMinutes,
+                                            elapsedSeconds,
+                                            running,
+                                            startedAtMillis,
+                                        ),
+                                    )
                                 },
-                                label = { Text(item, fontWeight = FontWeight.Bold, fontSize = 12.sp) },
-                                modifier = Modifier.weight(1f),
                             )
                         }
                     }
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp), color = Color(0xFFE8EDF3))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Rounded.AccessTime, null, tint = Color(0xFF173C72), modifier = Modifier.size(25.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("预计 ", color = Color(0xFF29476E), fontWeight = FontWeight.Bold)
-                        Text("$expectedMinutes", color = Color(0xFF3A87F5), fontSize = 27.sp, fontWeight = FontWeight.Black)
-                        Text(" 分钟", color = Color(0xFF29476E), fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.weight(1f))
-                        TextButton(onClick = onOpenSettings) {
-                            Icon(Icons.Rounded.Edit, null, modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(5.dp))
-                            Text("预计时间设置")
-                            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, modifier = Modifier.size(19.dp))
+                    Spacer(Modifier.weight(1f))
+                    HorizontalDivider(color = Color(0xFFE8EDF3))
+                    Spacer(Modifier.weight(1f))
+                    Surface(
+                        onClick = onOpenSettings,
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Color(0xFFF2F7FF),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD8E6F7)),
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Image(
+                                painterResource(R.drawable.mira_settings_group_timer),
+                                contentDescription = null,
+                                modifier = Modifier.size(34.dp),
+                            )
+                            Spacer(Modifier.width(9.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("设置科目预计时间", color = MiraNavy, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                                Text("当前 $subject · $expectedMinutes 分钟", color = Color(0xFF6A7E98), fontSize = 11.sp)
+                            }
+                            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = MiraBlue)
                         }
                     }
                 }
             }
             MiraCard(Modifier.fillMaxWidth().weight(0.53f)) {
-                TimerWeeklyChart(records = records)
+                TimerWeeklyChart(records = records, navigationStyle = navigationStyle)
             }
         }
 
         Column(Modifier.weight(1.18f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             MiraCard(Modifier.fillMaxWidth().weight(0.62f)) {
                 Box(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color.White, Color(0xFFFBFDFF))))) {
-                    Icon(Icons.Rounded.Star, null, tint = Color(0xFFFFD339), modifier = Modifier.align(Alignment.TopStart).padding(24.dp).size(37.dp))
-                    Surface(
-                        color = Color(0xFFFFF5CB), shape = RoundedCornerShape(4.dp),
-                        modifier = Modifier.align(Alignment.TopEnd).padding(20.dp).rotate(-6f),
-                    ) {
-                        Text("专注\n让成长看得见！", Modifier.padding(horizontal = 13.dp, vertical = 8.dp), color = Color(0xFF39516F), fontFamily = miraHandFont, fontSize = 15.sp)
-                    }
                     Column(
-                        Modifier.fillMaxSize().padding(horizontal = 26.dp, vertical = 18.dp),
+                        Modifier.fillMaxSize().padding(horizontal = 26.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                            Canvas(Modifier.size(266.dp)) {
-                                val stroke = Stroke(width = 18f, cap = StrokeCap.Round)
-                                drawArc(Color(0xFFE8EEF5), -225f, 270f, false, style = stroke)
+                        Box(
+                            Modifier.size(220.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Canvas(Modifier.fillMaxSize().aspectRatio(1f)) {
+                                val strokeWidth = size.minDimension * 0.075f
+                                val stroke = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                                val inset = strokeWidth / 2f + 4f
+                                val arcSize = Size(size.width - inset * 2f, size.height - inset * 2f)
+                                drawArc(
+                                    color = Color(0xFFE4EAF2), startAngle = -90f, sweepAngle = 360f,
+                                    useCenter = false, topLeft = Offset(inset, inset), size = arcSize, style = stroke,
+                                )
                                 val progress = min(1f, elapsedSeconds / (expectedMinutes * 60f))
-                                if (progress > 0f) drawArc(Color(0xFF4B91F2), -225f, 270f * progress, false, style = stroke)
-                                drawCircle(Color(0xFFA8BDD7), 9f, Offset(size.width * 0.25f, size.height * 0.09f))
+                                if (progress > 0f) {
+                                    drawArc(
+                                        color = subjectAccent(subject), startAngle = -90f, sweepAngle = 360f * progress,
+                                        useCenter = false, topLeft = Offset(inset, inset), size = arcSize, style = stroke,
+                                    )
+                                }
                             }
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text(formatTimer(elapsedSeconds), color = Color(0xFF082C63), fontSize = 65.sp, fontWeight = FontWeight.Black)
+                                Text(
+                                    formatTimer(elapsedSeconds),
+                                    color = Color(0xFF082C63),
+                                    style = MaterialTheme.typography.displayLarge.copy(
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 52.sp,
+                                        fontWeight = FontWeight.Black,
+                                        letterSpacing = 0.sp,
+                                    ),
+                                    maxLines = 1,
+                                    softWrap = false,
+                                )
                                 Text(if (running) "正在专注" else "从零开始", color = Color(0xFF71809A), fontSize = 19.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Button(
                                 onClick = { toggleTimer() },
-                                modifier = Modifier.weight(1.2f).height(56.dp),
+                                modifier = Modifier.weight(1f).height(56.dp),
                                 shape = RoundedCornerShape(28.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFFFAF08)),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (running) Color(0xFFE85F59) else Color(0xFFFFAF08),
+                                ),
                             ) {
-                                Icon(Icons.Rounded.PlayArrow, null, modifier = Modifier.size(28.dp))
+                                Icon(if (running) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null, modifier = Modifier.size(28.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text(if (running) "暂停" else "开始", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             }
-                            OutlinedButton(onClick = { resetTimer() }, modifier = Modifier.weight(0.9f).height(56.dp), shape = RoundedCornerShape(28.dp)) {
+                            Button(
+                                onClick = { resetTimer() },
+                                modifier = Modifier.weight(1f).height(56.dp),
+                                shape = RoundedCornerShape(28.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6682A6)),
+                            ) {
                                 Icon(Icons.Rounded.Refresh, null)
                                 Spacer(Modifier.width(5.dp))
-                                Text("重置", fontSize = 17.sp)
+                                Text("重置", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             }
-                            OutlinedButton(
+                            Button(
                                 onClick = { completeTimer() },
-                                modifier = Modifier.weight(0.9f).height(56.dp),
+                                modifier = Modifier.weight(1f).height(56.dp),
                                 shape = RoundedCornerShape(28.dp),
-                                border = androidx.compose.foundation.BorderStroke(2.dp, Color(0xFF159565)),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF159565)),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF159565)),
                             ) {
                                 Icon(Icons.Rounded.Check, null)
                                 Spacer(Modifier.width(4.dp))
-                                Text("完成", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                                Text("完成", fontSize = 18.sp, fontWeight = FontWeight.Bold)
                             }
                         }
                     }
                 }
             }
-            MiraCard(Modifier.fillMaxWidth().weight(0.38f)) {
+            Box(Modifier.fillMaxWidth().weight(0.38f)) {
                 TimerMotivationBanner()
             }
         }
@@ -1451,7 +1896,47 @@ private fun TimerScreen(onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun TimerWeeklyChart(records: List<FocusRecord>) {
+private fun TimerSubjectCard(
+    subject: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val accent = subjectAccent(subject)
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.width(116.dp).height(58.dp),
+        color = if (selected) accent else accent.copy(alpha = 0.10f),
+        shape = RoundedCornerShape(17.dp),
+        border = androidx.compose.foundation.BorderStroke(1.5.dp, accent.copy(alpha = if (selected) 1f else 0.45f)),
+    ) {
+        Row(
+            Modifier.fillMaxSize().padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            Image(
+                painter = painterResource(scheduleLessonIcon(subject)),
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                contentScale = ContentScale.Fit,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                subject,
+                color = if (selected) Color.White else accent,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Black,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TimerWeeklyChart(records: List<FocusRecord>, navigationStyle: NavigationStyle) {
+    val context = LocalContext.current
+    val configuredSubjects = remember { LocalStore(context).loadHomeworkSubjects() }
     var bySubject by rememberSaveable { mutableStateOf(false) }
     val weekStart = remember { LocalDate.now().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) }
     val weekRecords = records.filter { record ->
@@ -1459,7 +1944,9 @@ private fun TimerWeeklyChart(records: List<FocusRecord>) {
         !date.isBefore(weekStart) && !date.isAfter(weekStart.plusDays(6))
     }
     val rows = if (bySubject) {
-        homeworkSubjects.map { item -> item to weekRecords.filter { it.subject == item }.sumOf { it.durationMinutes } }
+        (configuredSubjects + weekRecords.map { it.subject }).distinct().map { item ->
+            item to weekRecords.filter { it.subject == item }.sumOf { it.durationMinutes }
+        }
     } else {
         val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
         names.mapIndexed { index, name ->
@@ -1470,16 +1957,24 @@ private fun TimerWeeklyChart(records: List<FocusRecord>) {
         }
     }
     val maximum = max(1, rows.maxOfOrNull { it.second } ?: 1)
+    val axisMaximum = timerChartAxisMaximum(maximum)
+    val ticks = listOf(axisMaximum, axisMaximum * 3 / 4, axisMaximum / 2, axisMaximum / 4, 0)
     val colors = listOf(
         Color(0xFF5A98F5), Color(0xFF64CEB0), Color(0xFFFFD852), Color(0xFFFF8175),
         Color(0xFF9B72E8), Color(0xFF45ADEB), Color(0xFF8BD15B),
     )
     Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 17.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("▥", color = Color(0xFF39C3B1), fontSize = 28.sp, fontWeight = FontWeight.Black)
-            Spacer(Modifier.width(9.dp))
-            Text("本周作业时长", color = MiraNavy, fontSize = 21.sp, fontWeight = FontWeight.Black)
+            TimerSectionTitle(timerWeeklySectionIcon(navigationStyle), "本周作业时长")
             Spacer(Modifier.weight(1f))
+            if (axisMaximum > 120) {
+                Text(
+                    "按最高 $axisMaximum 分钟显示",
+                    color = Color(0xFF6C7B91),
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(end = 8.dp),
+                )
+            }
             Surface(color = Color(0xFFF0F3F8), shape = RoundedCornerShape(22.dp)) {
                 Row(Modifier.padding(3.dp)) {
                     listOf(false to "按天", true to "按学科").forEach { (mode, label) ->
@@ -1501,21 +1996,43 @@ private fun TimerWeeklyChart(records: List<FocusRecord>) {
             }
         }
         Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.Bottom) {
-            rows.forEachIndexed { index, (label, minutes) ->
-                Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Spacer(Modifier.weight(1f))
-                    Text(if (minutes == 0) "" else minutes.toString(), color = Color(0xFF41587A), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(3.dp))
-                    Box(Modifier.height(112.dp).width(30.dp), contentAlignment = Alignment.BottomCenter) {
-                        Box(
-                            Modifier.fillMaxWidth().height(
-                                if (minutes == 0) 3.dp else (18f + 94f * minutes / maximum.toFloat()).dp,
-                            ).background(colors[index % colors.size], RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)),
-                        )
+        Row(Modifier.fillMaxSize()) {
+            Column(Modifier.width(38.dp).fillMaxHeight()) {
+                Text("分钟", color = Color(0xFF637590), fontSize = 10.sp, modifier = Modifier.height(16.dp))
+                Column(Modifier.height(124.dp).fillMaxWidth(), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.End) {
+                    ticks.forEach { tick -> Text(tick.toString(), color = Color(0xFF60718B), fontSize = 10.sp) }
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(Modifier.weight(1f).fillMaxHeight()) {
+                Spacer(Modifier.height(16.dp))
+                Box(Modifier.fillMaxWidth().height(124.dp)) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        repeat(5) { index ->
+                            val y = size.height * index / 4f
+                            drawLine(Color(0xFFDDE5EE), Offset(0f, y), Offset(size.width, y), strokeWidth = 1.2f)
+                        }
+                        drawLine(Color(0xFFBFCAD8), Offset(0f, 0f), Offset(0f, size.height), strokeWidth = 1.4f)
                     }
-                    Spacer(Modifier.height(5.dp))
-                    Text(label, color = Color(0xFF526A88), fontSize = 11.sp, maxLines = 1)
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.Bottom) {
+                        rows.forEachIndexed { index, (_, minutes) ->
+                            Column(Modifier.weight(1f).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Spacer(Modifier.weight(1f))
+                                Text(if (minutes == 0) "" else minutes.toString(), color = Color(0xFF41587A), fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(2.dp))
+                                Box(
+                                    Modifier.width(27.dp).height(
+                                        if (minutes == 0) 3.dp else (96f * minutes / axisMaximum.toFloat()).coerceAtLeast(8f).dp,
+                                    ).background(colors[index % colors.size], RoundedCornerShape(topStart = 7.dp, topEnd = 7.dp)),
+                                )
+                            }
+                        }
+                    }
+                }
+                Row(Modifier.fillMaxWidth().padding(top = 5.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    rows.forEach { (label, _) ->
+                        Text(label, modifier = Modifier.weight(1f), color = Color(0xFF526A88), fontSize = 10.sp, textAlign = TextAlign.Center, maxLines = 1)
+                    }
                 }
             }
         }
@@ -1523,20 +2040,24 @@ private fun TimerWeeklyChart(records: List<FocusRecord>) {
 }
 
 @Composable
-private fun TimerMotivationBanner() {
-    Box(
-        Modifier.fillMaxSize().background(
-            Brush.linearGradient(listOf(Color(0xFFFFF5CD), Color(0xFFE6F8FF), Color(0xFFD8F3E5))),
-        ),
-    ) {
+private fun TimerSectionTitle(iconRes: Int, title: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         Image(
-            painterResource(R.drawable.mira_green_hills),
+            painter = painterResource(iconRes),
             contentDescription = null,
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(74.dp).alpha(0.55f),
-            contentScale = ContentScale.FillBounds,
+            modifier = Modifier.size(34.dp),
+            contentScale = ContentScale.Fit,
         )
+        Spacer(Modifier.width(9.dp))
+        Text(title, color = MiraNavy, fontSize = 21.sp, fontWeight = FontWeight.Black)
+    }
+}
+
+@Composable
+private fun TimerMotivationBanner() {
+    Box(Modifier.fillMaxSize()) {
         Surface(
-            color = Color(0xFFFFF6D6),
+            color = Color(0xFFFFF6D6).copy(alpha = 0.78f),
             shape = RoundedCornerShape(46.dp),
             modifier = Modifier.align(Alignment.CenterStart).padding(start = 24.dp, end = 235.dp),
         ) {
@@ -1559,185 +2080,464 @@ private fun TimerMotivationBanner() {
 private fun SettingsScreen(
     navigationStyle: NavigationStyle,
     onNavigationStyleChanged: (NavigationStyle) -> Unit,
+    voiceWakeEnabled: Boolean,
+    voiceWakeStatus: String,
+    onVoiceWakeEnabledChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val store = remember { LocalStore(context) }
-    var expectedMinutes by rememberSaveable { mutableIntStateOf(store.loadExpectedMinutes()) }
-    var weatherRefreshMinutes by rememberSaveable { mutableIntStateOf(store.loadWeatherRefreshMinutes()) }
+    val configuredSubjects = remember { mutableStateListOf<String>().also { it.addAll(store.loadHomeworkSubjects()) } }
+    var expectedSubject by rememberSaveable { mutableStateOf(configuredSubjects.first()) }
+    var expectedMinutes by rememberSaveable { mutableIntStateOf(store.loadExpectedMinutes(expectedSubject)) }
+    var weatherRefreshHours by rememberSaveable {
+        mutableIntStateOf(((store.loadWeatherRefreshMinutes() + 59) / 60).coerceIn(1, 12))
+    }
+    var newSubject by rememberSaveable { mutableStateOf("") }
 
     fun updateExpected(minutes: Int) {
-        expectedMinutes = minutes.coerceIn(1, 240)
-        store.saveExpectedMinutes(expectedMinutes)
+        expectedMinutes = minutes.coerceIn(10, 99)
+        store.saveExpectedMinutes(expectedSubject, expectedMinutes)
         val timer = store.loadTimer()
-        if (!timer.running && timer.elapsedSeconds == 0) store.saveTimer(timer.copy(expectedMinutes = expectedMinutes))
+        if (timer.subject == expectedSubject && !timer.running && timer.elapsedSeconds == 0) {
+            store.saveTimer(timer.copy(expectedMinutes = expectedMinutes))
+        }
     }
 
-    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        MiraCard(Modifier.weight(1.05f).fillMaxHeight()) {
-            Column(
-                Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFFFFBF2), Color.White))).padding(30.dp),
-            ) {
-                SectionTitle("⏰", "计时设置", Color(0xFFFF9F1C))
-                Spacer(Modifier.height(18.dp))
-                Text("默认预计完成时间", style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(6.dp))
-                Text("到达预计时间会提醒，计时不会停止。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(20.dp))
-                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(20, 30, 35, 45, 60, 90).forEach { minutes ->
-                        FilterChip(selected = expectedMinutes == minutes, onClick = { updateExpected(minutes) }, label = { Text("${minutes}分") })
-                    }
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    FilledTonalButton(onClick = { updateExpected(expectedMinutes - 5) }, shape = CircleShape) { Text("−", fontSize = 26.sp) }
-                    Surface(
-                        modifier = Modifier.padding(horizontal = 18.dp),
-                        color = Color.White,
-                        shape = RoundedCornerShape(22.dp),
-                        shadowElevation = 2.dp,
-                    ) {
-                        Text("$expectedMinutes 分钟", Modifier.padding(horizontal = 30.dp, vertical = 18.dp), style = MaterialTheme.typography.headlineLarge, color = MiraBlue)
-                    }
-                    FilledTonalButton(onClick = { updateExpected(expectedMinutes + 5) }, shape = CircleShape) { Text("＋", fontSize = 24.sp) }
-                }
-                HorizontalDivider(Modifier.padding(vertical = 22.dp), color = Color(0xFFE7EAF0))
-                SectionTitle("🌤️", "天气刷新间隔", Color(0xFF4A9BE8))
-                Spacer(Modifier.height(7.dp))
-                Text("首页优先显示缓存天气，到达间隔后才重新定位获取。", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                Spacer(Modifier.height(10.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    listOf(15 to "15分", 30 to "30分", 60 to "1小时", 180 to "3小时").forEach { (minutes, label) ->
-                        FilterChip(
-                            selected = weatherRefreshMinutes == minutes,
-                            onClick = {
-                                weatherRefreshMinutes = minutes
-                                store.saveWeatherRefreshMinutes(minutes)
-                            },
-                            label = { Text(label, fontSize = 12.sp) },
-                            modifier = Modifier.weight(1f),
+    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(Modifier.fillMaxWidth().weight(1.08f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            MiraCard(Modifier.weight(1.05f).fillMaxHeight()) {
+                Column(
+                    Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFFFFBF2), Color.White))).padding(22.dp),
+                ) {
+                    SettingsCardTitle(R.drawable.mira_settings_group_timer, "计时设置", "拖动圆环，为每个学科单独设置")
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f).fillMaxHeight()) {
+                            Text("选择学科", color = MiraNavy, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(5.dp))
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                            ) {
+                                configuredSubjects.forEach { item ->
+                                    SettingsSubjectChip(
+                                        subject = item,
+                                        selected = expectedSubject == item,
+                                        onClick = {
+                                            expectedSubject = item
+                                            expectedMinutes = store.loadExpectedMinutes(item)
+                                        },
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.weight(1f))
+                            Surface(color = Color(0xFFFFF4D7), shape = RoundedCornerShape(15.dp)) {
+                                Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
+                                    Text("${expectedSubject}预计完成时间", color = Color(0xFF7B5721), fontWeight = FontWeight.Black, fontSize = 14.sp)
+                                    Text("范围 10–99 分钟；到时会提醒，计时不会停止。", color = Color(0xFF826F54), fontSize = 10.sp)
+                                }
+                            }
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        CircularValueSlider(
+                            value = expectedMinutes,
+                            valueRange = 10..99,
+                            onValueChange = ::updateExpected,
+                            unit = "分钟",
+                            color = subjectAccent(expectedSubject),
+                            modifier = Modifier.size(158.dp),
                         )
                     }
                 }
-                Spacer(Modifier.weight(1f))
-                Surface(color = Color(0xFFFFF1C9), shape = RoundedCornerShape(18.dp)) {
-                    Text("🔔 到达时间会提醒，完成后记得点击“完成”", Modifier.fillMaxWidth().padding(16.dp), color = Color(0xFF7C5413))
-                }
             }
-        }
-        Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-            MiraCard(Modifier.fillMaxWidth().weight(1.2f)) {
-                Column(Modifier.fillMaxSize().padding(24.dp)) {
-                    SectionTitle("🎨", "菜单栏风格", Color(0xFF7B72E9))
-                    Spacer(Modifier.height(12.dp))
-                    Text("点击即可实时预览并自动保存", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(12.dp))
+
+            MiraCard(Modifier.weight(1f).fillMaxHeight()) {
+                Column(Modifier.fillMaxSize().padding(20.dp)) {
+                    SettingsCardTitle(R.drawable.mira_settings_group_style, "菜单栏风格", "点击后立即预览并自动保存")
+                    Spacer(Modifier.height(8.dp))
                     NavigationStyle.entries.chunked(2).forEach { rowStyles ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             rowStyles.forEach { style ->
                                 Surface(
                                     onClick = { onNavigationStyleChanged(style) },
                                     modifier = Modifier.weight(1f).padding(vertical = 3.dp),
-                                    color = if (navigationStyle == style) Color(0xFFEAF2FF) else Color(0xFFF7F9FC),
-                                    shape = RoundedCornerShape(16.dp),
+                                    color = if (navigationStyle == style) Color(0xFFE7F0FF) else Color(0xFFF6F8FB),
+                                    shape = RoundedCornerShape(15.dp),
+                                    border = if (navigationStyle == style) androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF77A9F6)) else null,
                                 ) {
-                                    Row(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Row(Modifier.padding(horizontal = 9.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
                                         NavigationStylePreview(style)
-                                        Spacer(Modifier.width(8.dp))
+                                        Spacer(Modifier.width(7.dp))
                                         Column(Modifier.weight(1f)) {
-                                            Text(style.label, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                            Text(style.description.substringBefore('，'), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+                                            Text(style.label, color = MiraNavy, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                            Text(style.description.substringBefore('，'), color = Color(0xFF718097), fontSize = 10.sp, maxLines = 1)
                                         }
-                                        Text(if (navigationStyle == style) "✓" else "", color = MiraBlue, fontWeight = FontWeight.Bold)
+                                        if (navigationStyle == style) Text("✓", color = MiraBlue, fontWeight = FontWeight.Black)
                                     }
                                 }
+                            }
+                            if (rowStyles.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        }
+
+        Row(Modifier.fillMaxWidth().weight(0.92f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            MiraCard(Modifier.weight(1.05f).fillMaxHeight()) {
+                Column(
+                    Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF2FAFF), Color.White))).padding(20.dp),
+                ) {
+                    SettingsCardTitle(R.drawable.mira_settings_group_common, "常用设置", "天气刷新与语音唤醒")
+                    Spacer(Modifier.height(7.dp))
+                    Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text("天气刷新", color = MiraNavy, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            CircularValueSlider(
+                                value = weatherRefreshHours,
+                                valueRange = 1..12,
+                                onValueChange = { hours ->
+                                    weatherRefreshHours = hours
+                                    store.saveWeatherRefreshMinutes(hours * 60)
+                                },
+                                unit = "小时",
+                                color = Color(0xFF49A5E8),
+                                modifier = Modifier.size(128.dp),
+                            )
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Surface(
+                            modifier = Modifier.weight(1f),
+                            color = Color(0xFFEAF8F1),
+                            shape = RoundedCornerShape(18.dp),
+                        ) {
+                            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(color = Color.White, shape = CircleShape, modifier = Modifier.size(42.dp)) {
+                                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Rounded.Mic, null, tint = Color(0xFF239D70), modifier = Modifier.size(23.dp))
+                                        }
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text("小智语音唤醒", color = MiraNavy, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                                        Text(voiceWakeStatus, color = if (voiceWakeEnabled) MiraGreen else Color(0xFF718097), fontSize = 10.sp)
+                                    }
+                                    Switch(
+                                        checked = voiceWakeEnabled,
+                                        onCheckedChange = onVoiceWakeEnabledChanged,
+                                        colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MiraGreen),
+                                    )
+                                }
+                                Spacer(Modifier.height(5.dp))
+                                Text("App 前台时，说“你好小智”即可直接提问。", color = Color(0xFF718097), fontSize = 10.sp)
                             }
                         }
                     }
                 }
             }
-            MiraCard(Modifier.fillMaxWidth().weight(0.8f)) {
-                Box(Modifier.fillMaxSize().background(Color(0xFFF1FBF5))) {
+
+            MiraCard(Modifier.weight(1f).fillMaxHeight()) {
+                Box(Modifier.fillMaxSize().background(Color(0xFFF2FBF6))) {
                     Image(
                         painterResource(R.drawable.mira_green_hills),
                         contentDescription = null,
-                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(90.dp).alpha(0.42f),
+                        modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(72.dp).alpha(0.34f),
                         contentScale = ContentScale.FillBounds,
                     )
-                    Column(Modifier.fillMaxSize().padding(24.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            SectionTitle("📖", "字典数据", MiraGreen)
-                            Spacer(Modifier.weight(1f))
-                            Text("✓ 内置离线 · 可用", color = MiraGreen, fontWeight = FontWeight.Bold)
+                    Column(Modifier.fillMaxSize().padding(20.dp)) {
+                        SettingsCardTitle(R.drawable.mira_settings_group_subjects, "计时学科", "默认保留语文、数学、英语")
+                        Spacer(Modifier.height(7.dp))
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            configuredSubjects.forEach { item ->
+                                val removable = item !in defaultHomeworkSubjects
+                                SettingsSubjectChip(
+                                    subject = item,
+                                    removable = removable,
+                                    onRemove = if (!removable) null else {
+                                        {
+                                            configuredSubjects.remove(item)
+                                            store.saveHomeworkSubjects(configuredSubjects)
+                                            if (expectedSubject == item) {
+                                                expectedSubject = configuredSubjects.first()
+                                                expectedMinutes = store.loadExpectedMinutes(expectedSubject)
+                                            }
+                                        }
+                                    },
+                                )
+                            }
                         }
-                        Spacer(Modifier.height(12.dp))
-                        Text("约 3500 个常用汉字", style = MaterialTheme.typography.titleLarge)
-                        Spacer(Modifier.height(12.dp))
-                        Text("✓ 释义与组词已内置     ✓ 笔顺动画已内置", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(8.dp))
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = newSubject,
+                                onValueChange = { newSubject = it.take(8) },
+                                modifier = Modifier.weight(1f).height(49.dp),
+                                placeholder = { Text("添加学科，如：科学", fontSize = 12.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(14.dp),
+                            )
+                            Button(
+                                onClick = {
+                                    val value = newSubject.trim()
+                                    when {
+                                        value.isBlank() -> Toast.makeText(context, "请输入学科名称", Toast.LENGTH_SHORT).show()
+                                        value in configuredSubjects -> Toast.makeText(context, "这个学科已经有了", Toast.LENGTH_SHORT).show()
+                                        configuredSubjects.size >= 9 -> Toast.makeText(context, "最多添加 9 个学科", Toast.LENGTH_SHORT).show()
+                                        else -> {
+                                            configuredSubjects.add(value)
+                                            store.saveHomeworkSubjects(configuredSubjects)
+                                            newSubject = ""
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.height(47.dp),
+                                shape = RoundedCornerShape(14.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MiraGreen),
+                            ) { Text("＋ 添加") }
+                        }
                         Spacer(Modifier.weight(1f))
-                        Text("所有学习记录仅保存在本机", color = MiraGreen)
+                        Text("学习记录与字典数据均保存在本机", color = MiraGreen, fontSize = 11.sp)
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SettingsCardTitle(iconRes: Int, title: String, subtitle: String) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Image(painterResource(iconRes), null, Modifier.size(48.dp), contentScale = ContentScale.Fit)
+        Spacer(Modifier.width(10.dp))
+        Column {
+            Text(title, color = MiraNavy, fontSize = 20.sp, fontWeight = FontWeight.Black)
+            Text(subtitle, color = Color(0xFF718097), fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun SettingsSubjectChip(
+    subject: String,
+    selected: Boolean = false,
+    removable: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    onRemove: (() -> Unit)? = null,
+) {
+    val accent = subjectAccent(subject)
+    val chipContent: @Composable () -> Unit = {
+        Row(
+            Modifier.padding(start = 9.dp, end = if (removable) 5.dp else 11.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Image(painterResource(scheduleLessonIcon(subject)), null, Modifier.size(27.dp), contentScale = ContentScale.Fit)
+            Spacer(Modifier.width(6.dp))
+            Text(
+                subject,
+                color = if (selected) Color.White else accent,
+                fontWeight = FontWeight.Black,
+                fontSize = 13.sp,
+            )
+            if (removable && onRemove != null) {
+                Spacer(Modifier.width(5.dp))
+                Surface(onClick = onRemove, color = accent, shape = CircleShape, modifier = Modifier.size(19.dp)) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("×", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+    if (onClick != null) {
+        Surface(
+            onClick = onClick,
+            color = if (selected) accent else accent.copy(alpha = 0.11f),
+            shape = RoundedCornerShape(17.dp),
+            border = androidx.compose.foundation.BorderStroke(1.2.dp, accent.copy(alpha = if (selected) 1f else 0.42f)),
+            content = chipContent,
+        )
+    } else {
+        Surface(
+            color = accent.copy(alpha = 0.11f),
+            shape = RoundedCornerShape(17.dp),
+            border = androidx.compose.foundation.BorderStroke(1.2.dp, accent.copy(alpha = 0.42f)),
+            content = chipContent,
+        )
+    }
+}
+
+@Composable
+private fun CircularValueSlider(
+    value: Int,
+    valueRange: IntRange,
+    onValueChange: (Int) -> Unit,
+    unit: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    val safeValue = value.coerceIn(valueRange.first, valueRange.last)
+    val rangeSize = (valueRange.last - valueRange.first).coerceAtLeast(1)
+    val progress = (safeValue - valueRange.first) / rangeSize.toFloat()
+    Box(modifier.aspectRatio(1f), contentAlignment = Alignment.Center) {
+        Canvas(
+            Modifier.fillMaxSize().pointerInput(valueRange) {
+                fun valueAt(position: Offset): Int {
+                    val center = Offset(size.width / 2f, size.height / 2f)
+                    var degrees = Math.toDegrees(
+                        atan2((position.y - center.y).toDouble(), (position.x - center.x).toDouble()),
+                    ).toFloat() + 90f
+                    if (degrees < 0f) degrees += 360f
+                    return (valueRange.first + degrees / 360f * rangeSize).roundToInt()
+                        .coerceIn(valueRange.first, valueRange.last)
+                }
+                detectDragGestures(
+                    onDragStart = { position -> onValueChange(valueAt(position)) },
+                    onDrag = { change, _ -> onValueChange(valueAt(change.position)) },
+                )
+            },
+        ) {
+            val strokeWidth = size.minDimension * 0.095f
+            val inset = strokeWidth / 2f + 3f
+            val diameter = size.minDimension - inset * 2f
+            val stroke = Stroke(strokeWidth, cap = StrokeCap.Round)
+            drawArc(
+                color = Color(0xFFE1E8F0),
+                startAngle = -90f,
+                sweepAngle = 360f,
+                useCenter = false,
+                topLeft = Offset(inset, inset),
+                size = Size(diameter, diameter),
+                style = stroke,
+            )
+            if (progress > 0f) {
+                drawArc(
+                    color = color,
+                    startAngle = -90f,
+                    sweepAngle = progress * 360f,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = Size(diameter, diameter),
+                    style = stroke,
+                )
+            }
+            val angle = Math.toRadians((progress * 360f - 90f).toDouble())
+            val radius = diameter / 2f
+            val center = Offset(size.width / 2f, size.height / 2f)
+            val thumb = Offset(
+                center.x + cos(angle).toFloat() * radius,
+                center.y + sin(angle).toFloat() * radius,
+            )
+            drawCircle(Color.White, radius = strokeWidth * 0.43f, center = thumb)
+            drawCircle(color, radius = strokeWidth * 0.29f, center = thumb)
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(safeValue.toString(), color = MiraNavy, fontSize = 29.sp, fontWeight = FontWeight.Black)
+            Text(unit, color = Color(0xFF718097), fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 
 @Composable
 private fun NavigationStylePreview(style: NavigationStyle) {
-    val background = when (style) {
-        NavigationStyle.FRESH -> MiraSky
-        NavigationStyle.COLORFUL -> Color(0xFFFFE9B8)
-        NavigationStyle.JOURNAL -> Color(0xFFFFF0C7)
-        NavigationStyle.MINIMAL -> Color.White
-        NavigationStyle.STATIONERY -> Color(0xFF438FF4)
-    }
-    val accent = when (style) {
-        NavigationStyle.COLORFUL -> screenAccent(AppScreen.HOME)
-        NavigationStyle.JOURNAL -> MiraGreen
-        NavigationStyle.STATIONERY -> Color(0xFF438FF4)
-        else -> MiraBlue
-    }
-    val contentColor = if (style == NavigationStyle.FRESH || style == NavigationStyle.STATIONERY) Color.White else accent
-    Surface(color = background, shape = RoundedCornerShape(12.dp), shadowElevation = if (style == NavigationStyle.MINIMAL) 2.dp else 0.dp) {
-        Box(Modifier.padding(horizontal = 10.dp, vertical = 7.dp).size(24.dp), contentAlignment = Alignment.Center) {
-            NavigationStyleIcon(style, AppScreen.HOME, selected = true, accent = accent, contentColor = contentColor)
-        }
-    }
+    NavigationStyleIcon(style, AppScreen.HOME, Modifier.size(43.dp))
 }
 
 @Composable
-private fun DictionaryScreen(initialQuery: String = "") {
+private fun DictionaryScreen(
+    initialQuery: String = "",
+    onVoiceSessionChanged: (Boolean) -> Unit,
+) {
     val context = LocalContext.current
     val repository = remember { DictionaryRepository(context.applicationContext) }
     var query by rememberSaveable { mutableStateOf("") }
     var entry by remember { mutableStateOf<DictionaryEntry?>(null) }
     var results by remember { mutableStateOf<List<DictionaryEntry>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
+    var showVoiceOverlay by remember { mutableStateOf(false) }
     var listening by remember { mutableStateOf(false) }
+    var voiceTranscript by remember { mutableStateOf("") }
+    var voiceError by remember { mutableStateOf<String?>(null) }
+    var voiceLevel by remember { mutableFloatStateOf(0f) }
+    var showMeaningDetails by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(initialQuery) {
         if (initialQuery.isNotBlank()) query = initialQuery
     }
-    val speechLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        listening = false
-        if (result.resultCode == Activity.RESULT_OK) {
-            val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull().orEmpty()
-            if (spoken.isNotBlank()) {
-                val extracted = extractDictionaryQuery(spoken)
-                query = extracted
-                Toast.makeText(context, "听到：$spoken\n正在查：$extracted", Toast.LENGTH_SHORT).show()
+    val speechRecognizer = remember {
+        if (SpeechRecognizer.isRecognitionAvailable(context)) SpeechRecognizer.createSpeechRecognizer(context) else null
+    }
+    DisposableEffect(speechRecognizer) {
+        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) { listening = true; voiceError = null }
+            override fun onBeginningOfSpeech() { listening = true }
+            override fun onRmsChanged(rmsdB: Float) { voiceLevel = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f) }
+            override fun onBufferReceived(buffer: ByteArray?) = Unit
+            override fun onEndOfSpeech() { listening = false }
+            override fun onError(error: Int) {
+                listening = false
+                onVoiceSessionChanged(false)
+                voiceError = when (error) {
+                    SpeechRecognizer.ERROR_NO_MATCH -> "没有听清，再说一次吧"
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "没有听到声音，再试一次吧"
+                    SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "语音服务暂时不可用"
+                    else -> "识别没有完成，请再试一次"
+                }
             }
+            override fun onResults(results: Bundle?) {
+                listening = false
+                onVoiceSessionChanged(false)
+                val spoken = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
+                if (spoken.isNotBlank()) {
+                    voiceTranscript = spoken
+                    query = extractDictionaryQuery(spoken)
+                    voiceError = null
+                    showVoiceOverlay = false
+                }
+            }
+            override fun onPartialResults(partialResults: Bundle?) {
+                partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let {
+                    if (it.isNotBlank()) voiceTranscript = it
+                }
+            }
+            override fun onEvent(eventType: Int, params: Bundle?) = Unit
+        })
+        onDispose {
+            onVoiceSessionChanged(false)
+            speechRecognizer?.destroy()
+        }
+    }
+    fun startDictionaryVoiceSearch() {
+        onVoiceSessionChanged(true)
+        showVoiceOverlay = true
+        voiceTranscript = ""
+        voiceError = null
+        if (speechRecognizer == null) {
+            onVoiceSessionChanged(false)
+            voiceError = "设备暂不支持语音识别"
+            return
+        }
+        listening = true
+        runCatching {
+            speechRecognizer.startListening(dictionarySpeechIntent().putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
+        }.onFailure {
+            listening = false
+            onVoiceSessionChanged(false)
+            voiceError = "语音识别暂时无法启动"
         }
     }
     val microphonePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) {
-            listening = true
-            runCatching { speechLauncher.launch(dictionarySpeechIntent()) }.onFailure {
-                listening = false
-                Toast.makeText(context, "系统语音识别暂不可用", Toast.LENGTH_SHORT).show()
-            }
+            startDictionaryVoiceSearch()
         } else {
-            Toast.makeText(context, "需要麦克风权限才能语音查字", Toast.LENGTH_LONG).show()
+            showVoiceOverlay = true
+            voiceError = "需要麦克风权限才能语音查字"
+        }
+    }
+    fun requestDictionaryVoiceSearch() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startDictionaryVoiceSearch()
+        } else {
+            microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -1750,62 +2550,129 @@ private fun DictionaryScreen(initialQuery: String = "") {
         loading = false
     }
 
+    val selectedEntry = entry
+    Box(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            Modifier.fillMaxWidth().height(58.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
-                label = { Text("内置字典：输入汉字、拼音或词语") },
-                leadingIcon = { Text("⌕", fontSize = 26.sp) },
-                trailingIcon = {
-                    Text(if (loading) "查询中" else "${results.size} 条", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                placeholder = { Text("输入汉字、拼音或词语（如 ba4）", color = Color(0xFF8796AE), fontSize = 16.sp) },
+                leadingIcon = {
+                    Image(painterResource(R.drawable.mira_dict_search), "搜索", Modifier.size(28.dp))
                 },
-                modifier = Modifier.weight(1f),
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        Surface(onClick = { query = "" }, color = Color.Transparent, shape = CircleShape) {
+                            Image(painterResource(R.drawable.mira_dict_clear), "清空", Modifier.padding(3.dp).size(27.dp))
+                        }
+                    }
+                },
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                shape = RoundedCornerShape(23.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White,
+                    unfocusedContainerColor = Color.White,
+                    focusedBorderColor = Color(0xFF92D3FF),
+                    unfocusedBorderColor = Color(0xFFC5E6FA),
+                ),
+                textStyle = MaterialTheme.typography.titleMedium.copy(color = MiraNavy),
                 singleLine = true,
             )
-            Button(
-                onClick = {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-                        listening = true
-                        runCatching { speechLauncher.launch(dictionarySpeechIntent()) }.onFailure {
-                            listening = false
-                            Toast.makeText(context, "系统语音识别暂不可用", Toast.LENGTH_SHORT).show()
-                        }
-                    } else microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
-                },
+            Surface(
+                onClick = { requestDictionaryVoiceSearch() },
                 enabled = !listening,
-                modifier = Modifier.height(56.dp),
-            ) { Text(if (listening) "正在听…" else "🎤 语音查字") }
-        }
-        if (!loading && results.size > 1) {
-            Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                results.forEach { result ->
-                    FilterChip(
-                        selected = entry?.word == result.word,
-                        onClick = { entry = result },
-                        label = { Text("${result.word}  ${result.pinyin.replace(" / ", " · ")}") },
-                    )
+                modifier = Modifier.width(168.dp).height(52.dp),
+                shape = RoundedCornerShape(26.dp),
+                color = Color(0xFF258DF3),
+                shadowElevation = 5.dp,
+            ) {
+                Row(Modifier.fillMaxSize().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Image(painterResource(R.drawable.mira_dict_voice), null, Modifier.size(33.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (listening) "正在听…" else "语音查字", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
-        val selectedEntry = entry
+        if (!loading && results.size > 1) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().height(62.dp).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                results.forEach { result ->
+                    val chosen = selectedEntry?.word == result.word
+                    Surface(
+                        onClick = { entry = result },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (chosen) Color(0xFFD9F2FF) else Color.White,
+                        border = androidx.compose.foundation.BorderStroke(1.dp, if (chosen) Color(0xFF4AA8F5) else Color(0xFFDDE8F2)),
+                    ) {
+                        Row(Modifier.padding(horizontal = 14.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(result.word, fontFamily = miraKaiFont, fontSize = 28.sp, color = MiraNavy)
+                            Spacer(Modifier.width(7.dp))
+                            Text(candidatePinyinLabel(result.pinyin, query), color = Color(0xFF5F7593), fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        } else {
+            Spacer(Modifier.height(10.dp))
+        }
         if (!loading && selectedEntry == null) {
             MiraCard(Modifier.fillMaxSize()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("3500 常用字库暂未找到“$query”") }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("内置字典暂未找到“$query”", color = Color(0xFF6A7A91), fontSize = 20.sp)
+                }
             }
         } else if (selectedEntry != null) {
-            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                MiraCard(Modifier.weight(0.92f).fillMaxHeight()) { CharacterPanel(selectedEntry, onSelect = { query = it }) }
-                Column(Modifier.weight(1.08f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    MiraCard(Modifier.fillMaxWidth().weight(1.15f)) { MeaningPanel(selectedEntry) }
-                    MiraCard(Modifier.fillMaxWidth().weight(0.85f)) { WordsPanel(selectedEntry, onSelect = { query = it }) }
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                MiraCard(Modifier.weight(1.9f).fillMaxHeight()) {
+                    CharacterPanel(selectedEntry)
+                }
+                Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    MiraCard(Modifier.fillMaxWidth().weight(1.14f), onClick = { showMeaningDetails = true }) {
+                        MeaningPanel(selectedEntry)
+                    }
+                    MiraCard(Modifier.fillMaxWidth().weight(0.86f)) {
+                        WordsPanel(selectedEntry, onSelect = { query = it })
+                    }
                 }
             }
         } else {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("正在打开离线字典…") }
         }
+    }
+        if (showVoiceOverlay) {
+            Box(Modifier.fillMaxSize().background(Color(0xFFF7FBFF).copy(alpha = 0.64f)))
+            HomeVoiceOverlay(
+                listening = listening,
+                transcript = voiceTranscript,
+                error = voiceError,
+                level = voiceLevel,
+                onRetry = { startDictionaryVoiceSearch() },
+                onCancel = {
+                    speechRecognizer?.cancel()
+                    onVoiceSessionChanged(false)
+                    showVoiceOverlay = false
+                    listening = false
+                },
+                onComplete = {
+                    onVoiceSessionChanged(false)
+                    if (voiceTranscript.isNotBlank()) query = extractDictionaryQuery(voiceTranscript)
+                    showVoiceOverlay = false
+                },
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
+    }
+    if (showMeaningDetails && selectedEntry != null) {
+        MeaningDetailOverlay(selectedEntry, onDismiss = { showMeaningDetails = false })
     }
 }
 
@@ -1832,41 +2699,139 @@ internal fun extractDictionaryQuery(spoken: String): String {
         .ifBlank { spoken.trim() }
 }
 
+private fun candidatePinyinLabel(pinyin: String, query: String): String {
+    val numbered = Regex("^([a-zA-ZüÜvV]+)([1-5])$").matchEntire(query.trim())
+        ?: return pinyin.substringBefore(" / ")
+    val expected = normalizePinyinLabel(numbered.groupValues[1])
+    val tone = numbered.groupValues[2].toInt()
+    return pinyin.split(Regex("[\\s/,;·・]+"))
+        .firstOrNull { normalizePinyinLabel(it) == expected && pinyinToneLabel(it) == tone }
+        ?: pinyin.substringBefore(" / ")
+}
+
+private fun normalizePinyinLabel(value: String): String = Normalizer
+    .normalize(value.replace('ɡ', 'g').lowercase(), Normalizer.Form.NFD)
+    .replace(Regex("\\p{M}+"), "")
+    .replace('ü', 'v')
+
+private fun pinyinToneLabel(value: String): Int = when {
+    value.any { it in "āēīōūǖ" } -> 1
+    value.any { it in "áéíóúǘ" } -> 2
+    value.any { it in "ǎěǐǒǔǚ" } -> 3
+    value.any { it in "àèìòùǜ" } -> 4
+    else -> 5
+}
+
 @Composable
-private fun CharacterPanel(entry: DictionaryEntry, onSelect: (String) -> Unit) {
+private fun CharacterPanel(entry: DictionaryEntry) {
     val speak = rememberSpeaker()
-    Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth()) { SectionTitle("▤", "汉字详情", MiraGreen) }
-        Spacer(Modifier.height(14.dp))
-        Surface(shape = RoundedCornerShape(18.dp), color = Color(0xFFFFFAF0), modifier = Modifier.size(260.dp)) {
-            StrokeOrderView(entry.word, entry.strokePaths)
+    var replaySignal by remember(entry.word) { mutableIntStateOf(0) }
+    Row(
+        Modifier.fillMaxSize().padding(20.dp),
+        horizontalArrangement = Arrangement.spacedBy(20.dp),
+    ) {
+        Column(Modifier.width(306.dp).fillMaxHeight(), horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = Color(0xFFFFFBF1),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFD9C8A9)),
+                modifier = Modifier.size(306.dp),
+            ) {
+                StrokeOrderView(entry.word, entry.strokePaths, replaySignal)
+            }
+            Spacer(Modifier.height(12.dp))
+            FilledTonalButton(
+                onClick = { replaySignal++ },
+                modifier = Modifier.height(48.dp),
+                colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color(0xFFE4F5FF)),
+            ) {
+                Image(painterResource(R.drawable.mira_dict_replay), null, Modifier.size(25.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("重播笔顺", color = Color(0xFF174477), fontWeight = FontWeight.Bold)
+            }
         }
-        Spacer(Modifier.height(12.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(entry.pinyin, style = MaterialTheme.typography.headlineLarge)
-            FilledTonalButton(onClick = { speak(entry.word) }) { Text("🔊 朗读") }
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(entry.pinyin.substringBefore(" / "), color = Color(0xFF082B63), fontSize = 43.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.width(12.dp))
+                Surface(onClick = { speak(entry.word) }, color = Color.Transparent, shape = CircleShape) {
+                    Image(painterResource(R.drawable.mira_dict_speaker), "朗读", Modifier.padding(3.dp).size(49.dp))
+                }
+            }
+            Text(
+                "部首 ${entry.radical}  ·  ${entry.strokes}画  ·  ${entry.structure}",
+                color = Color(0xFF183B70),
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            StrokeSequencePanel(entry, Modifier.fillMaxWidth().weight(1f))
         }
-        Spacer(Modifier.height(6.dp))
-        Text("部首 ${entry.radical}   ·   ${entry.strokes}画   ·   ${entry.structure}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.weight(1f))
-        if (entry.related.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                entry.related.take(4).forEach { RelatedTile(it, Modifier.weight(1f), onSelect) }
+    }
+}
+
+@Composable
+private fun StrokeSequencePanel(entry: DictionaryEntry, modifier: Modifier = Modifier) {
+    val parsedPaths = remember(entry.strokePaths) {
+        entry.strokePaths.mapNotNull { data -> runCatching { PathParser().parsePathString(data).toPath() }.getOrNull() }
+    }
+    Surface(modifier = modifier, color = Color(0xFFF3F9FD), shape = RoundedCornerShape(20.dp)) {
+        Column(Modifier.fillMaxSize().padding(14.dp)) {
+            Text("笔顺", color = Color(0xFF163D74), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            if (parsedPaths.isEmpty()) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text("暂无笔顺数据", color = Color(0xFF8493A7))
+                }
+            } else {
+                BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+                    val gap = 7.dp
+                    val columns = if (maxWidth >= 330.dp) 6 else 4
+                    val cellSize = ((maxWidth - gap * (columns - 1)) / columns).coerceAtMost(54.dp)
+                    val rows = parsedPaths.indices.chunked(columns)
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                        rows.forEachIndexed { rowIndex, rowSteps ->
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+                                rowSteps.forEach { step ->
+                                    StrokeStepCell(parsedPaths, step, Modifier.size(cellSize))
+                                }
+                                repeat(columns - rowSteps.size) { Spacer(Modifier.size(cellSize)) }
+                            }
+                            if (rowIndex < rows.lastIndex) Spacer(Modifier.height(gap))
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun StrokeOrderView(character: String, strokePaths: List<String>) {
+private fun StrokeStepCell(paths: List<Path>, lastVisibleIndex: Int, modifier: Modifier = Modifier) {
+    Surface(modifier = modifier, color = Color.White, shape = RoundedCornerShape(7.dp), border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD5E1EB))) {
+        Canvas(Modifier.fillMaxSize().padding(4.dp)) {
+            val scale = size.minDimension / 1024f
+            withTransform({
+                translate(left = (size.width - 1024f * scale) / 2f, top = 900f * scale)
+                scale(scaleX = scale, scaleY = -scale, pivot = Offset.Zero)
+            }) {
+                paths.take(lastVisibleIndex + 1).forEachIndexed { index, path ->
+                    drawPath(path, if (index == lastVisibleIndex) Color(0xFFE84B43) else Color(0xFF17243A))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StrokeOrderView(character: String, strokePaths: List<String>, replaySignal: Int) {
     val parsedPaths = remember(strokePaths) {
         strokePaths.mapNotNull { data -> runCatching { PathParser().parsePathString(data).toPath() }.getOrNull() }
     }
     var visibleStrokes by remember(character, parsedPaths) { mutableIntStateOf(0) }
     var playing by remember(character) { mutableStateOf(false) }
-    var replay by remember(character) { mutableIntStateOf(0) }
 
-    LaunchedEffect(character, parsedPaths, replay) {
+    LaunchedEffect(character, parsedPaths, replaySignal) {
         if (parsedPaths.isNotEmpty()) {
             playing = true
             visibleStrokes = 0
@@ -1906,13 +2871,8 @@ private fun StrokeOrderView(character: String, strokePaths: List<String>) {
             }
         }
         if (parsedPaths.isEmpty()) {
-            Text(character, fontSize = 142.sp, fontWeight = FontWeight.Medium, color = MiraNavy, modifier = Modifier.align(Alignment.Center))
+            Text(character, fontSize = 142.sp, fontFamily = miraKaiFont, color = MiraNavy, modifier = Modifier.align(Alignment.Center))
         }
-        FilledTonalButton(
-            onClick = { replay++ },
-            enabled = parsedPaths.isNotEmpty() && !playing,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
-        ) { Text(if (playing) "播放中" else "▶ 笔顺") }
     }
 }
 
@@ -1953,14 +2913,70 @@ private fun rememberSpeaker(): (String) -> Unit {
 
 @Composable
 private fun MeaningPanel(entry: DictionaryEntry) {
-    Column(Modifier.fillMaxSize().padding(26.dp).verticalScroll(rememberScrollState())) {
-        SectionTitle("◉", "基本释义")
-        Spacer(Modifier.height(18.dp))
-        entry.meanings.forEachIndexed { index, meaning ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 9.dp), verticalAlignment = Alignment.Top) {
-                Text("${index + 1}", color = Color.White, textAlign = TextAlign.Center,
-                    modifier = Modifier.size(34.dp).background(MiraGreen, CircleShape).padding(top = 6.dp))
-                Spacer(Modifier.width(14.dp)); Text(meaning, style = MaterialTheme.typography.titleLarge)
+    Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(R.drawable.mira_dict_meaning), null, Modifier.size(47.dp))
+            Spacer(Modifier.width(9.dp))
+            Text("基本释义", color = Color(0xFF0B326A), fontSize = 24.sp, fontWeight = FontWeight.Black)
+        }
+        Spacer(Modifier.height(12.dp))
+        Text(
+            entry.meanings.joinToString(separator = "\n") { it.trim() },
+            color = Color(0xFF28394F),
+            fontSize = 17.sp,
+            lineHeight = 25.sp,
+            maxLines = 8,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "点击卡片查看全部释义",
+            color = Color(0xFF6EA5C9),
+            fontSize = 12.sp,
+            maxLines = 1,
+            modifier = Modifier.align(Alignment.End).padding(bottom = 3.dp),
+        )
+    }
+}
+
+@Composable
+private fun MeaningDetailOverlay(entry: DictionaryEntry, onDismiss: () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.width(660.dp).height(360.dp),
+            shape = RoundedCornerShape(28.dp),
+            color = Color(0xFFFFFEFC),
+            shadowElevation = 12.dp,
+            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD8EAF6)),
+        ) {
+            Column(Modifier.fillMaxSize().padding(26.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Image(painterResource(R.drawable.mira_dict_meaning), null, Modifier.size(45.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(entry.word, color = Color(0xFF102650), fontFamily = miraKaiFont, fontSize = 52.sp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(entry.pinyin, color = Color(0xFF337FC7), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(18.dp))
+                    Text("全部释义", color = MiraNavy, fontSize = 24.sp, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.weight(1f))
+                    Surface(onClick = onDismiss, color = Color(0xFFE7F5FF), shape = CircleShape) {
+                        Text("×", Modifier.padding(horizontal = 14.dp, vertical = 6.dp), color = Color(0xFF4F6F91), fontSize = 25.sp)
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                HorizontalDivider(color = Color(0xFFE3EDF4))
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    entry.meanings.joinToString(separator = "\n") { it.trim() },
+                    color = Color(0xFF24364D),
+                    fontSize = 20.sp,
+                    lineHeight = 32.sp,
+                    modifier = Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
+                )
             }
         }
     }
@@ -1968,23 +2984,26 @@ private fun MeaningPanel(entry: DictionaryEntry) {
 
 @Composable
 private fun WordsPanel(entry: DictionaryEntry, onSelect: (String) -> Unit) {
-    Column(Modifier.fillMaxSize().padding(26.dp)) {
-        SectionTitle("⌁", "组词", MiraGreen)
-        Spacer(Modifier.height(18.dp))
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            entry.phrases.forEach { phrase ->
-                Surface(onClick = { onSelect(phrase.take(1)) }, shape = RoundedCornerShape(14.dp), color = Color(0xFFFFF1CF)) {
-                    Text(phrase, Modifier.padding(horizontal = 20.dp, vertical = 14.dp), color = Color(0xFF8A4B08), fontWeight = FontWeight.Bold)
-                }
-            }
+    Column(Modifier.fillMaxSize().padding(22.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(R.drawable.mira_dict_words), null, Modifier.size(47.dp))
+            Spacer(Modifier.width(9.dp))
+            Text("组词", color = Color(0xFF0B326A), fontSize = 24.sp, fontWeight = FontWeight.Black)
         }
-    }
-}
-
-@Composable
-private fun RelatedTile(text: String, modifier: Modifier = Modifier, onClick: (String) -> Unit) {
-    Surface(onClick = { onClick(text) }, modifier = modifier, shape = RoundedCornerShape(12.dp), color = MiraSky) {
-        Text(text, Modifier.padding(vertical = 12.dp), textAlign = TextAlign.Center, fontSize = 22.sp)
+        Spacer(Modifier.height(13.dp))
+        entry.phrases.take(6).chunked(3).forEachIndexed { index, phrases ->
+            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                phrases.forEach { phrase ->
+                    Surface(onClick = { onSelect(phrase.take(1)) }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(22.dp), color = Color(0xFFDFF3FF)) {
+                        Box(Modifier.fillMaxSize().padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
+                            Text(phrase, color = Color(0xFF173B6D), fontWeight = FontWeight.Bold, fontSize = 17.sp, textAlign = TextAlign.Center, maxLines = 1)
+                        }
+                    }
+                }
+                repeat(3 - phrases.size) { Spacer(Modifier.weight(1f)) }
+            }
+            if (index == 0) Spacer(Modifier.height(9.dp))
+        }
     }
 }
 
@@ -1996,66 +3015,139 @@ private fun ScheduleScreen() {
     val lessons = remember { mutableStateListOf<Lesson>().also { it.addAll(store.loadLessons()) } }
     var selectedDay by rememberSaveable { mutableIntStateOf(0) }
     var showAdd by remember { mutableStateOf(false) }
+    var addPeriod by remember { mutableIntStateOf(1) }
     var editingLesson by remember { mutableStateOf<Lesson?>(null) }
     var deletingLesson by remember { mutableStateOf<Lesson?>(null) }
+    var hasPendingChanges by rememberSaveable { mutableStateOf(false) }
     val weekdays = listOf("周一", "周二", "周三", "周四", "周五")
     val dayLessons = lessons.filter { it.day == selectedDay }.sortedBy { it.period }
 
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                weekdays.forEachIndexed { index, day -> FilterChip(selected = selectedDay == index, onClick = { selectedDay = index }, label = { Text(day) }) }
+        Row(Modifier.fillMaxWidth().height(58.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            weekdays.forEachIndexed { index, day ->
+                val selected = selectedDay == index
+                Surface(
+                    onClick = { selectedDay = index },
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    color = if (selected) Color(0xFFFFCC45) else Color(0xFFF4F9FE),
+                    shape = RoundedCornerShape(17.dp),
+                    shadowElevation = if (selected) 4.dp else 1.dp,
+                    border = if (selected) null else androidx.compose.foundation.BorderStroke(1.dp, Color.White),
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(day, color = Color(0xFF173B70), fontSize = 19.sp, fontWeight = FontWeight.Black)
+                    }
+                }
             }
-            Button(onClick = { showAdd = true }) { Text("＋ 添加课程") }
+            Surface(
+                onClick = {
+                    addPeriod = (1..12).firstOrNull { period -> dayLessons.none { it.period == period } } ?: 1
+                    showAdd = true
+                },
+                modifier = Modifier.width(180.dp).fillMaxHeight(),
+                color = Color(0xFF4DBA6C),
+                shape = RoundedCornerShape(18.dp),
+                shadowElevation = 4.dp,
+            ) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Text("＋", color = Color.White, fontSize = 35.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(7.dp))
+                    Text("添加课程", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Black)
+                }
+            }
+            Surface(
+                onClick = {
+                    store.saveLessons(lessons)
+                    hasPendingChanges = false
+                    Toast.makeText(context, "课表已保存", Toast.LENGTH_SHORT).show()
+                },
+                enabled = hasPendingChanges,
+                modifier = Modifier.width(180.dp).fillMaxHeight(),
+                color = if (hasPendingChanges) Color(0xFF2D86ED) else Color(0xFFD9E2EC),
+                shape = RoundedCornerShape(18.dp),
+                shadowElevation = if (hasPendingChanges) 4.dp else 0.dp,
+            ) {
+                Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(23.dp))
+                    Spacer(Modifier.width(7.dp))
+                    Text(if (hasPendingChanges) "保存课表" else "已保存", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Black)
+                }
+            }
         }
         Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            MiraCard(Modifier.weight(1.55f).fillMaxHeight()) {
-                Column(Modifier.fillMaxSize().padding(28.dp).verticalScroll(rememberScrollState())) {
-                    SectionTitle("📅", "${weekdays[selectedDay]}课程", MiraOrange)
-                    Spacer(Modifier.height(18.dp))
-                    if (dayLessons.isEmpty()) {
-                        Box(Modifier.fillMaxWidth().height(220.dp), contentAlignment = Alignment.Center) { Text("今天还没有课程，可以点击右上角添加。") }
-                    }
-                    dayLessons.forEach { lesson ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.weight(1f)) { LessonRow(lesson) }
-                            TextButton(onClick = { editingLesson = lesson }) { Text("编辑") }
-                            TextButton(onClick = { deletingLesson = lesson }) { Text("删除") }
+        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            MiraCard(Modifier.weight(1.85f).fillMaxHeight()) {
+                Column(Modifier.fillMaxSize().padding(horizontal = 18.dp, vertical = 16.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(color = Color(0xFFFFF3CE), shape = RoundedCornerShape(12.dp)) {
+                            Text("${weekdays[selectedDay]}课程", Modifier.padding(horizontal = 18.dp, vertical = 8.dp), color = MiraNavy, fontSize = 23.sp, fontWeight = FontWeight.Black)
                         }
+                        Text("  ！", color = Color(0xFFFF745B), fontSize = 28.sp, fontWeight = FontWeight.Black)
+                        Spacer(Modifier.weight(1f))
+                        Text("加油！新的一天从这里开始！ ☺", color = Color(0xFF6583A8), fontFamily = miraHandFont, fontSize = 15.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    (1..7).forEach { period ->
+                        val lesson = dayLessons.firstOrNull { it.period == period }
+                        ScheduleLessonRow(
+                            period = period,
+                            lesson = lesson,
+                            onEdit = {
+                                if (lesson != null) editingLesson = lesson
+                                else {
+                                    addPeriod = period
+                                    showAdd = true
+                                }
+                            },
+                        )
                     }
                 }
             }
-            Column(Modifier.weight(0.7f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                MiraCard(Modifier.fillMaxWidth().weight(0.9f)) {
-                    Column(
-                        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFFFF3C9), Color.White))).padding(24.dp),
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(0.8f), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("${weekdays[selectedDay]}", style = MaterialTheme.typography.titleLarge)
-                                Text("${dayLessons.size}", style = MaterialTheme.typography.displayLarge, color = Color(0xFFFF8A24), fontSize = 66.sp)
-                                Text("节课", style = MaterialTheme.typography.headlineMedium)
+            Column(Modifier.weight(0.85f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                MiraCard(Modifier.fillMaxWidth().weight(1f)) {
+                    Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFFFF8D9), Color(0xFFFFFEF7))))) {
+                        Column(Modifier.fillMaxSize().padding(20.dp)) {
+                            Row(verticalAlignment = Alignment.Bottom) {
+                                Text("今天", color = MiraNavy, fontSize = 27.sp, fontWeight = FontWeight.Black)
+                                Text(" ${dayLessons.size} ", color = Color(0xFFFF861F), fontSize = 52.sp, fontWeight = FontWeight.Black)
+                                Text("节课", color = MiraNavy, fontSize = 27.sp, fontWeight = FontWeight.Black)
                             }
-                            Image(
-                                painterResource(R.drawable.mira_backpack_books),
-                                contentDescription = null,
-                                modifier = Modifier.weight(1.2f).height(138.dp),
-                                contentScale = ContentScale.Fit,
-                            )
+                            Text("好好上课\n收获更棒的自己！", color = Color(0xFF6583A8), fontFamily = miraHandFont, fontSize = 16.sp, lineHeight = 22.sp)
+                            Spacer(Modifier.weight(1f))
                         }
-                        Text("认真上好每一节课", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally))
+                        Image(
+                            painterResource(R.drawable.mira_schedule_backpack),
+                            contentDescription = null,
+                            modifier = Modifier.align(Alignment.BottomEnd).fillMaxWidth(0.82f).height(190.dp).padding(end = 6.dp, bottom = 6.dp),
+                            contentScale = ContentScale.Fit,
+                        )
+                        Text("★", modifier = Modifier.align(Alignment.BottomStart).padding(start = 22.dp, bottom = 18.dp), color = Color(0xFFFFBF27), fontSize = 34.sp)
                     }
                 }
-                MiraCard(Modifier.fillMaxWidth().weight(1.1f)) {
-                    Column(Modifier.fillMaxSize().background(Color(0xFFF4FAFF)).padding(24.dp)) {
-                        SectionTitle("💡", "课前小提醒", Color(0xFFFFB21E))
-                        Spacer(Modifier.height(18.dp))
-                        listOf("带好课本和文具", "课前准备好学习用品", "认真听讲，积极思考").forEach {
-                            Text("✅  $it", Modifier.padding(vertical = 8.dp), style = MaterialTheme.typography.titleMedium)
+                MiraCard(Modifier.fillMaxWidth().weight(0.78f)) {
+                    Box(Modifier.fillMaxSize().background(Color(0xFFFFFEFB))) {
+                        Canvas(Modifier.fillMaxSize()) {
+                            var y = 52.dp.toPx()
+                            while (y < size.height) {
+                                drawLine(Color(0xFFE7EEF4), Offset(0f, y), Offset(size.width, y), 1f)
+                                y += 34.dp.toPx()
+                            }
                         }
-                        Spacer(Modifier.weight(1f)); Text("每一节课，都是成长的机会！", color = MiraBlue)
+                        Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 17.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("💡", fontSize = 23.sp)
+                                Spacer(Modifier.width(7.dp))
+                                Text("小提醒", color = MiraNavy, fontSize = 19.sp, fontWeight = FontWeight.Black)
+                                Spacer(Modifier.weight(1f))
+                                Text("★", color = Color(0xFFFFBE26), fontSize = 29.sp)
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            listOf("带好课本和文具", "上课认真听讲", "做一个棒棒的自己！").forEach {
+                                Text("✅  $it", Modifier.padding(vertical = 6.dp), color = Color(0xFF29476E), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                            }
+                            Spacer(Modifier.weight(1f))
+                            Text("加油！ ♡", color = Color(0xFF6B89AC), fontFamily = miraHandFont, fontSize = 20.sp, modifier = Modifier.align(Alignment.End))
+                        }
                     }
                 }
             }
@@ -2063,20 +3155,27 @@ private fun ScheduleScreen() {
     }
 
     if (showAdd) {
-        LessonDialog(day = selectedDay, initial = null, onDismiss = { showAdd = false }, onSave = { lesson ->
+        LessonDialog(day = selectedDay, initial = null, initialPeriod = addPeriod, onDismiss = { showAdd = false }, onSave = { lesson ->
             val conflict = lessons.any { it.day == lesson.day && it.period == lesson.period }
             if (conflict) Toast.makeText(context, "第 ${lesson.period} 节已经有课程了", Toast.LENGTH_SHORT).show()
-            else { lessons.add(lesson); store.saveLessons(lessons); showAdd = false }
+            else {
+                lessons.add(lesson)
+                hasPendingChanges = true
+                showAdd = false
+            }
         })
     }
     editingLesson?.let { original ->
-        LessonDialog(day = original.day, initial = original, onDismiss = { editingLesson = null }, onSave = { updated ->
+        LessonDialog(day = original.day, initial = original, initialPeriod = original.period, onDismiss = { editingLesson = null }, onDelete = {
+            editingLesson = null
+            deletingLesson = original
+        }, onSave = { updated ->
             val conflict = lessons.any { it != original && it.day == updated.day && it.period == updated.period }
             if (conflict) Toast.makeText(context, "第 ${updated.period} 节已经有课程了", Toast.LENGTH_SHORT).show()
             else {
                 val index = lessons.indexOf(original)
                 if (index >= 0) lessons[index] = updated
-                store.saveLessons(lessons)
+                hasPendingChanges = true
                 editingLesson = null
             }
         })
@@ -2088,7 +3187,9 @@ private fun ScheduleScreen() {
             text = { Text("确定删除“第 ${lesson.period} 节 ${lesson.name}”吗？") },
             confirmButton = {
                 TextButton(onClick = {
-                    lessons.remove(lesson); store.saveLessons(lessons); deletingLesson = null
+                    lessons.remove(lesson)
+                    hasPendingChanges = true
+                    deletingLesson = null
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { deletingLesson = null }) { Text("取消") } },
@@ -2097,36 +3198,63 @@ private fun ScheduleScreen() {
 }
 
 @Composable
-private fun LessonRow(lesson: Lesson) {
-    val colors = listOf(Color(0xFFFFE5E3), Color(0xFFE5F2FF), Color(0xFFE8F7E8), Color(0xFFFFF0C9), Color(0xFFF0E9FF), Color(0xFFE1F7F3))
-    val icon = when {
-        lesson.name.contains("语文") -> "📖"
-        lesson.name.contains("数学") -> "📐"
-        lesson.name.contains("英语") -> "ABC"
-        lesson.name.contains("体育") -> "⚽"
-        lesson.name.contains("美术") -> "🎨"
-        lesson.name.contains("音乐") -> "♫"
-        lesson.name.contains("科学") -> "🔬"
-        else -> "✦"
-    }
+private fun ScheduleLessonRow(period: Int, lesson: Lesson?, onEdit: () -> Unit) {
+    val colors = listOf(Color(0xFFFFE2E4), Color(0xFFDDEEFF), Color(0xFFE2F5DD), Color(0xFFFFF0C4), Color(0xFFEDE4FF), Color(0xFFDDF6F1), Color(0xFFFFE8D6))
+    val baseColor = colors[(period - 1).mod(colors.size)]
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-        color = colors[(lesson.period - 1).mod(colors.size)],
-        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth().height(58.dp).padding(vertical = 2.dp),
+        color = if (lesson != null) baseColor else Color(0xFFF3F6F9),
+        shape = RoundedCornerShape(16.dp),
     ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("第${lesson.period}节", fontWeight = FontWeight.Bold, color = MiraNavy, modifier = Modifier.width(64.dp))
-            Text(icon, fontSize = 23.sp, textAlign = TextAlign.Center, modifier = Modifier.width(52.dp))
-            Text(lesson.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Text("按节次", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            Surface(color = if (lesson != null) baseColor.copy(alpha = 0.78f) else Color(0xFFE8EDF2), modifier = Modifier.width(112.dp).fillMaxHeight()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("第${period}节", fontWeight = FontWeight.Black, color = if (lesson != null) MiraNavy else Color(0xFF8997A9), fontSize = 16.sp)
+                }
+            }
+            Spacer(Modifier.width(18.dp))
+            if (lesson != null) {
+                Image(painterResource(scheduleLessonIcon(lesson.name)), null, Modifier.size(42.dp), contentScale = ContentScale.Fit)
+                Spacer(Modifier.width(18.dp))
+                Text(lesson.name, color = MiraNavy, fontSize = 21.sp, fontWeight = FontWeight.Black, modifier = Modifier.weight(1f))
+            } else {
+                Text("暂无课程", color = Color(0xFF95A2B2), fontSize = 17.sp, modifier = Modifier.weight(1f))
+            }
+            Surface(onClick = onEdit, color = Color.White.copy(alpha = 0.76f), shape = CircleShape, modifier = Modifier.size(40.dp)) {
+                Image(painterResource(R.drawable.mira_schedule_edit), if (lesson != null) "编辑课程" else "添加课程", Modifier.padding(7.dp), contentScale = ContentScale.Fit)
+            }
+            Spacer(Modifier.width(16.dp))
         }
     }
 }
 
+private fun scheduleLessonIcon(name: String): Int = when {
+    name.contains("语文") -> R.drawable.mira_schedule_chinese
+    name.contains("数学") -> R.drawable.mira_schedule_math
+    name.contains("英语") -> R.drawable.mira_schedule_english
+    name.contains("体育") -> R.drawable.mira_schedule_sports
+    name.contains("美术") -> R.drawable.mira_schedule_art
+    name.contains("音乐") -> R.drawable.mira_schedule_music
+    name.contains("社团") || name.contains("班会") -> R.drawable.mira_schedule_club
+    name.contains("选修") -> R.drawable.mira_schedule_elective
+    name.contains("劳动") -> R.drawable.mira_schedule_labor
+    name.contains("竖笛") -> R.drawable.mira_schedule_recorder
+    name.contains("科学") -> R.drawable.mira_schedule_science
+    name.contains("信息") || name.contains("电脑") || name.contains("计算机") -> R.drawable.mira_schedule_computer
+    else -> R.drawable.mira_schedule_talent
+}
+
 @Composable
-private fun LessonDialog(day: Int, initial: Lesson?, onDismiss: () -> Unit, onSave: (Lesson) -> Unit) {
+private fun LessonDialog(
+    day: Int,
+    initial: Lesson?,
+    initialPeriod: Int,
+    onDismiss: () -> Unit,
+    onDelete: (() -> Unit)? = null,
+    onSave: (Lesson) -> Unit,
+) {
     var name by remember(initial) { mutableStateOf(initial?.name.orEmpty()) }
-    var period by remember(initial) { mutableIntStateOf(initial?.period ?: 1) }
+    var period by remember(initial, initialPeriod) { mutableIntStateOf(initial?.period ?: initialPeriod) }
     val canSave = name.isNotBlank()
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2134,6 +3262,13 @@ private fun LessonDialog(day: Int, initial: Lesson?, onDismiss: () -> Unit, onSa
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(name, { name = it }, label = { Text("课程名称") }, singleLine = true)
+                Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    listOf("语文", "数学", "英语", "体育", "美术", "音乐", "社团", "选修", "劳动", "竖笛").forEach { subject ->
+                        Surface(onClick = { name = subject }, shape = RoundedCornerShape(14.dp), color = if (name == subject) Color(0xFFD9EEFF) else Color(0xFFF1F5F9)) {
+                            Text(subject, Modifier.padding(horizontal = 12.dp, vertical = 7.dp), color = MiraNavy, fontSize = 13.sp)
+                        }
+                    }
+                }
                 Text("选择节次", style = MaterialTheme.typography.titleMedium)
                 Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     (1..12).forEach { number ->
@@ -2143,85 +3278,369 @@ private fun LessonDialog(day: Int, initial: Lesson?, onDismiss: () -> Unit, onSa
                 Text("课程只按节次排列，不需要填写具体时间。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         },
-        confirmButton = { TextButton(enabled = canSave, onClick = { onSave(Lesson(day, name.trim(), period)) }) { Text("保存") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        confirmButton = { TextButton(enabled = canSave, onClick = { onSave(Lesson(day, name.trim(), period)) }) { Text("应用") } },
+        dismissButton = {
+            Row {
+                if (onDelete != null) TextButton(onClick = onDelete) { Text("删除课程", color = MaterialTheme.colorScheme.error) }
+                TextButton(onClick = onDismiss) { Text("取消") }
+            }
+        },
     )
 }
 
 @Composable
 private fun WeatherScreen() {
-    var cityIndex by rememberSaveable { mutableIntStateOf(0) }
+    val context = LocalContext.current
+    val store = remember { LocalStore(context.applicationContext) }
+    val manualCities = remember { mutableStateListOf<WeatherCity>().apply { addAll(store.loadManualWeatherCities()) } }
+    var selectedManualCityName by rememberSaveable { mutableStateOf<String?>(null) }
+    var locatedCityName by rememberSaveable { mutableStateOf(store.loadWeatherCache()?.weather?.placeName) }
     var refresh by remember { mutableIntStateOf(0) }
-    var info by remember { mutableStateOf<WeatherInfo?>(null) }
+    var permissionEpoch by remember { mutableIntStateOf(0) }
+    var report by remember { mutableStateOf<WeatherReport?>(null) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
-    val city = weatherCities[cityIndex]
+    var showAddCity by remember { mutableStateOf(false) }
+    var cityInput by remember { mutableStateOf("") }
+    var pendingCityName by remember { mutableStateOf<String?>(null) }
+    var addingCity by remember { mutableStateOf(false) }
+    var deletingCity by remember { mutableStateOf<WeatherCity?>(null) }
+    val hasLocationPermission = permissionEpoch.let {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        permissionEpoch++
+    }
+    val selectedManualCity = manualCities.firstOrNull { it.name == selectedManualCityName }
+    val displayCityName = selectedManualCity?.name ?: locatedCityName ?: "当前位置"
 
-    LaunchedEffect(cityIndex, refresh) {
-        loading = true; error = null
-        runCatching { withContext(Dispatchers.IO) { WeatherRepository.load(city) } }
-            .onSuccess { info = it }
+    LaunchedEffect(selectedManualCityName, refresh, permissionEpoch, manualCities.size) {
+        loading = true
+        error = null
+        if (selectedManualCity == null && !hasLocationPermission) {
+            loading = false
+            error = "需要定位权限才能获取所在城市"
+            return@LaunchedEffect
+        }
+        runCatching {
+            withContext(Dispatchers.IO) {
+                val city = selectedManualCity ?: DeviceWeatherRepository.locate(context)
+                city to WeatherRepository.loadReport(city)
+            }
+        }.onSuccess { (city, weatherReport) ->
+            if (selectedManualCity == null) {
+                locatedCityName = city.name
+                store.saveWeatherCache(WeatherCache(LocatedWeather(city.name, weatherReport.current), System.currentTimeMillis()))
+            }
+            report = weatherReport
+        }
             .onFailure { error = it.message ?: "无法连接天气服务" }
         loading = false
     }
 
-    Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                weatherCities.forEachIndexed { index, item -> FilterChip(selected = cityIndex == index, onClick = { cityIndex = index }, label = { Text(item.name) }) }
+    LaunchedEffect(pendingCityName) {
+        val requestedName = pendingCityName ?: return@LaunchedEffect
+        addingCity = true
+        runCatching {
+            withContext(Dispatchers.IO) { DeviceWeatherRepository.geocodeCity(context, requestedName) }
+        }.onSuccess { city ->
+            if (city.name != locatedCityName && manualCities.none { it.name == city.name }) {
+                manualCities += city
+                store.saveManualWeatherCities(manualCities)
             }
-            OutlinedButton(onClick = { refresh++ }) { Text("刷新") }
+            selectedManualCityName = if (city.name == locatedCityName) null else city.name
+            showAddCity = false
+            cityInput = ""
+        }.onFailure {
+            Toast.makeText(context, it.message ?: "添加城市失败", Toast.LENGTH_SHORT).show()
         }
-        Spacer(Modifier.height(14.dp))
-        MiraCard(Modifier.fillMaxSize()) {
+        addingCity = false
+        pendingCityName = null
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
             Row(
-                Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFFDDF2FF), Color.White))).padding(40.dp),
+                Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Column(Modifier.weight(1f)) {
-                    SectionTitle("☁", "实时天气")
-                    Spacer(Modifier.height(30.dp))
-                    Text(city.name, style = MaterialTheme.typography.headlineLarge)
-                    when {
-                        loading -> Text("正在获取天气…", style = MaterialTheme.typography.titleLarge)
-                        error != null -> {
-                            Text("暂时无法获取", style = MaterialTheme.typography.headlineMedium)
-                            Spacer(Modifier.height(8.dp)); Text(error.orEmpty(), color = MaterialTheme.colorScheme.error)
-                        }
-                        info != null -> {
-                            Text("${info!!.temperature.toInt()}°C", style = MaterialTheme.typography.displayLarge, fontSize = 88.sp)
-                            Text(info!!.description, style = MaterialTheme.typography.headlineMedium)
+                WeatherCityChip(
+                    name = locatedCityName ?: "定位城市",
+                    selected = selectedManualCityName == null,
+                    location = true,
+                    onClick = { selectedManualCityName = null },
+                )
+                manualCities.forEach { city ->
+                    WeatherCityChip(
+                        name = city.name,
+                        selected = selectedManualCityName == city.name,
+                        onClick = { selectedManualCityName = city.name },
+                        onLongClick = { deletingCity = city },
+                    )
+                }
+                Surface(
+                    onClick = { showAddCity = true },
+                    color = Color(0xFFE9F5FF),
+                    shape = RoundedCornerShape(24.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFB9DFFF)),
+                ) {
+                    Text("＋ 添加城市", Modifier.padding(horizontal = 17.dp, vertical = 10.dp), color = Color(0xFF2379D7), fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.width(10.dp))
+            Text("长按城市可删除", color = Color(0xFF6A7E98), fontSize = 11.sp)
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(onClick = { refresh++ }, shape = RoundedCornerShape(22.dp)) {
+                Icon(Icons.Rounded.Refresh, null, Modifier.size(20.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("刷新")
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth().height(268.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            MiraCard(Modifier.weight(1.32f).fillMaxHeight()) {
+                Box(Modifier.fillMaxSize()) {
+                    Image(
+                        painterResource(R.drawable.mira_weather_qingdao_v1),
+                        contentDescription = "青岛城市插画",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                    Box(
+                        Modifier.fillMaxHeight().width(250.dp)
+                            .background(Brush.horizontalGradient(listOf(Color(0xCCDEF3FF), Color.Transparent))),
+                    )
+                    Column(Modifier.align(Alignment.TopStart).padding(start = 26.dp, top = 16.dp)) {
+                        Text(displayCityName, color = MiraNavy, fontSize = 28.sp, fontWeight = FontWeight.Black)
+                        when {
+                            loading -> Text("正在获取天气…", color = Color(0xFF466A91), fontSize = 18.sp)
+                            error != null -> {
+                                Text("暂时无法获取", color = MiraNavy, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                                Text(error.orEmpty(), color = Color(0xFFB14242), fontSize = 13.sp, modifier = Modifier.widthIn(max = 210.dp))
+                            }
+                            report != null -> {
+                                Text("${report!!.current.temperature.toInt()}℃", color = Color(0xFF082B63), fontSize = 54.sp, fontWeight = FontWeight.Black)
+                                Text(report!!.current.description, color = MiraNavy, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
-                }
-                Column(Modifier.weight(0.9f), horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (cityIndex == 0) {
+                    report?.current?.let { current ->
                         Image(
-                            painterResource(R.drawable.mira_shanghai_weather),
-                            contentDescription = "上海城市天气插画",
-                            modifier = Modifier.fillMaxWidth().height(220.dp),
-                            contentScale = ContentScale.Fit,
+                            painterResource(weatherIconResource(current.weatherCode)),
+                            contentDescription = current.description,
+                            modifier = Modifier.align(Alignment.TopEnd).padding(14.dp).size(96.dp),
                         )
-                    } else {
-                        Text(info?.symbol ?: "🌤️", fontSize = 118.sp)
                     }
-                    Spacer(Modifier.height(12.dp))
-                    Surface(shape = cardShape, color = Color.White.copy(alpha = 0.82f)) {
-                        Column(Modifier.padding(26.dp).widthIn(min = 260.dp)) {
-                            WeatherMetric("相对湿度", info?.let { "${it.humidity}%" } ?: "--")
-                            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                            WeatherMetric("风速", info?.let { "${it.windSpeed} km/h" } ?: "--")
-                            HorizontalDivider(Modifier.padding(vertical = 12.dp))
-                            WeatherMetric("更新时间", "刚刚")
+                    Text(
+                        "海风轻轻吹来，\n今天也要闪闪发光！",
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(18.dp),
+                        color = Color(0xFF315F8C),
+                        fontFamily = miraHandFont,
+                        fontSize = 16.sp,
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
+            Column(Modifier.weight(0.9f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                WeatherMetricCard(
+                    R.drawable.mira_weather_fog,
+                    "相对湿度",
+                    report?.current?.let { "${it.humidity}%" } ?: "--",
+                    Color(0xFFE4F4FF),
+                    Modifier.weight(1f),
+                )
+                WeatherMetricCard(
+                    R.drawable.mira_weather_cloudy,
+                    "风速",
+                    report?.current?.let { "${it.windSpeed.toInt()} km/h" } ?: "--",
+                    Color(0xFFECEBFF),
+                    Modifier.weight(1f),
+                )
+                WeatherMetricCard(
+                    R.drawable.mira_weather_partly_cloudy,
+                    "体感温度",
+                    report?.current?.let { "${it.apparentTemperature.toInt()}℃" } ?: "--",
+                    Color(0xFFFFF0D9),
+                    Modifier.weight(1f),
+                )
+                WeatherMetricCard(
+                    R.drawable.mira_weather_rain,
+                    "当前降水",
+                    report?.current?.let { String.format(Locale.US, "%.1f mm", it.precipitation) } ?: "--",
+                    Color(0xFFE5F8EF),
+                    Modifier.weight(1f),
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        MiraCard(Modifier.fillMaxWidth().weight(1f)) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("未来五天天气预报", color = MiraNavy, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.weight(1f))
+                    Text("一起期待更多好天气！ ★", color = Color(0xFF58779B), fontFamily = miraHandFont, fontSize = 14.sp)
+                }
+                Spacer(Modifier.height(5.dp))
+                Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val forecasts = report?.daily.orEmpty()
+                    if (forecasts.isEmpty()) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text(if (loading) "正在加载未来天气…" else "暂无预报数据", color = Color(0xFF6A7E98))
                         }
+                    } else {
+                        forecasts.forEach { daily -> WeatherForecastCard(daily, Modifier.weight(1f).fillMaxHeight()) }
                     }
                 }
+            }
+        }
+    }
+
+    if (showAddCity) {
+        AlertDialog(
+            onDismissRequest = { if (!addingCity) showAddCity = false },
+            title = { Text("添加城市") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("输入城市名称，例如：北京、杭州、成都。")
+                    OutlinedTextField(
+                        value = cityInput,
+                        onValueChange = { cityInput = it },
+                        label = { Text("城市名称") },
+                        singleLine = true,
+                        enabled = !addingCity,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = cityInput.isNotBlank() && !addingCity,
+                    onClick = { pendingCityName = cityInput.trim() },
+                ) { Text(if (addingCity) "正在查找…" else "添加") }
+            },
+            dismissButton = { TextButton(enabled = !addingCity, onClick = { showAddCity = false }) { Text("取消") } },
+        )
+    }
+
+    deletingCity?.let { city ->
+        AlertDialog(
+            onDismissRequest = { deletingCity = null },
+            title = { Text("删除城市") },
+            text = { Text("确定从天气列表中删除“${city.name}”吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        manualCities.remove(city)
+                        store.saveManualWeatherCities(manualCities)
+                        if (selectedManualCityName == city.name) selectedManualCityName = null
+                        deletingCity = null
+                    },
+                ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { deletingCity = null }) { Text("取消") } },
+        )
+    }
+
+    if (!hasLocationPermission && selectedManualCityName == null && !showAddCity) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("开启定位天气") },
+            text = { Text("天气页默认只保留设备所在城市，需要定位权限才能自动识别。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION))
+                }) { Text("开启定位") }
+            },
+            dismissButton = { TextButton(onClick = { showAddCity = true }) { Text("手动添加城市") } },
+        )
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun WeatherCityChip(
+    name: String,
+    selected: Boolean,
+    location: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    Surface(
+        modifier = Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick),
+        color = if (selected) Color(0xFF3398F3) else Color(0xFFE9F4FF),
+        shape = RoundedCornerShape(24.dp),
+        border = if (selected) androidx.compose.foundation.BorderStroke(3.dp, Color(0xFFC7E8FF)) else null,
+    ) {
+        Row(Modifier.padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (location) {
+                Icon(Icons.Rounded.LocationOn, null, tint = if (selected) Color.White else Color(0xFF338CE2), modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(5.dp))
+            }
+            Text(name, color = if (selected) Color.White else MiraNavy, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        }
+    }
+}
+
+@Composable
+private fun WeatherMetricCard(
+    icon: Int,
+    label: String,
+    value: String,
+    backgroundColor: Color,
+    modifier: Modifier = Modifier,
+) {
+    Surface(modifier.fillMaxWidth(), color = backgroundColor, shape = RoundedCornerShape(18.dp)) {
+        Row(Modifier.fillMaxSize().padding(horizontal = 15.dp), verticalAlignment = Alignment.CenterVertically) {
+            Image(painterResource(icon), null, Modifier.size(38.dp))
+            Spacer(Modifier.width(11.dp))
+            Column {
+                Text(label, color = Color(0xFF47688E), fontSize = 12.sp)
+                Text(value, color = MiraNavy, fontSize = 18.sp, fontWeight = FontWeight.Black)
             }
         }
     }
 }
 
 @Composable
-private fun WeatherMetric(label: String, value: String) {
-    Row(Modifier.fillMaxWidth()) { Text(label, color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.weight(1f)); Text(value, fontWeight = FontWeight.Bold) }
+private fun WeatherForecastCard(daily: DailyWeather, modifier: Modifier = Modifier) {
+    val date = runCatching { LocalDate.parse(daily.date) }.getOrNull()
+    val weekDay = when (date?.dayOfWeek) {
+        DayOfWeek.MONDAY -> "周一"; DayOfWeek.TUESDAY -> "周二"; DayOfWeek.WEDNESDAY -> "周三"
+        DayOfWeek.THURSDAY -> "周四"; DayOfWeek.FRIDAY -> "周五"; DayOfWeek.SATURDAY -> "周六"
+        DayOfWeek.SUNDAY -> "周日"; else -> ""
+    }
+    Surface(modifier, color = Color(0xFFF0F8FF), shape = RoundedCornerShape(17.dp)) {
+        Column(
+            Modifier.fillMaxSize().padding(top = 5.dp, bottom = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            Text(
+                date?.let { "${it.monthValue}月${it.dayOfMonth}日  $weekDay" } ?: daily.date,
+                color = MiraNavy,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Black,
+            )
+            Image(painterResource(weatherIconResource(daily.weatherCode)), daily.description, Modifier.size(36.dp))
+            Text(daily.description, color = MiraNavy, fontSize = 12.sp, fontWeight = FontWeight.Black)
+            Text(
+                "${daily.minTemperature.toInt()}℃ ~ ${daily.maxTemperature.toInt()}℃",
+                color = MiraNavy,
+                fontWeight = FontWeight.Black,
+                fontSize = 12.sp,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+private fun weatherIconResource(code: Int): Int = when (code) {
+    0 -> R.drawable.mira_weather_sunny
+    1, 2 -> R.drawable.mira_weather_partly_cloudy
+    3 -> R.drawable.mira_weather_cloudy
+    45, 48 -> R.drawable.mira_weather_fog
+    71, 73, 75, 77, 85, 86 -> R.drawable.mira_weather_snow
+    95, 96, 99 -> R.drawable.mira_weather_storm
+    else -> R.drawable.mira_weather_rain
 }

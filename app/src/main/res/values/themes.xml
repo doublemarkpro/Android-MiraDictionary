@@ -2,8 +2,10 @@
     <style name="Theme.MiraStudy" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:statusBarColor">#F8FAFD</item>
-        <item name="android:navigationBarColor">#F8FAFD</item>
+        <item name="android:statusBarColor">#00000000</item>
+        <item name="android:navigationBarColor">#00000000</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
 </resources>

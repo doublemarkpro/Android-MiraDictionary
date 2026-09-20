@@ -73,8 +73,10 @@ class DictionaryRepository(private val context: Context) {
 
     fun search(query: String, limit: Int = 20): List<DictionaryEntry> {
         val trimmed = query.trim()
-        if (trimmed.isBlank()) return listOfNotNull(findExact("规"))
-        val normalizedPinyin = normalizePinyin(trimmed)
+        if (trimmed.isBlank()) return listOfNotNull(findExact("智"))
+        val numberedPinyin = parseNumberedPinyin(trimmed)
+        val normalizedPinyin = numberedPinyin?.first ?: normalizePinyin(trimmed)
+        val databaseLimit = if (numberedPinyin != null) 300 else limit
         val sql = """
             SELECT character, pinyin, radical, stroke_count, structure,
                    frequency, meanings, phrases, related, stroke_paths
@@ -95,9 +97,15 @@ class DictionaryRepository(private val context: Context) {
             trimmed,
             normalizedPinyin,
             "$normalizedPinyin%",
-            limit.toString(),
+            databaseLimit.toString(),
         )
-        return database.rawQuery(sql, args).use { cursor -> cursor.toEntries() }
+        val matches = database.rawQuery(sql, args).use { cursor -> cursor.toEntries() }
+        return if (numberedPinyin == null) {
+            matches
+        } else {
+            val (syllable, tone) = numberedPinyin
+            matches.filter { entry -> entry.pinyin.matchesTone(syllable, tone) }.take(limit)
+        }
     }
 
     fun findExact(character: String): DictionaryEntry? {
@@ -138,6 +146,27 @@ class DictionaryRepository(private val context: Context) {
         val decomposed = Normalizer.normalize(value.replace('ɡ', 'g').lowercase(), Normalizer.Form.NFD)
         return decomposed.replace(Regex("\\p{M}+"), "").replace('ü', 'v')
     }
+
+    private fun parseNumberedPinyin(value: String): Pair<String, Int>? {
+        val match = Regex("^([a-zA-ZüÜvV]+)([1-5])$").matchEntire(value.trim()) ?: return null
+        return normalizePinyin(match.groupValues[1]) to match.groupValues[2].toInt()
+    }
+
+    private fun String.matchesTone(expectedSyllable: String, expectedTone: Int): Boolean =
+        split(Regex("[\\s/,;·・]+")).any { rawSyllable ->
+            normalizePinyin(rawSyllable) == expectedSyllable && pinyinTone(rawSyllable) == expectedTone
+        }
+
+    private fun pinyinTone(value: String): Int {
+        val marked = value.lowercase()
+        return when {
+            marked.any { it in "āēīōūǖ" } -> 1
+            marked.any { it in "áéíóúǘ" } -> 2
+            marked.any { it in "ǎěǐǒǔǚ" } -> 3
+            marked.any { it in "àèìòùǜ" } -> 4
+            else -> 5
+        }
+    }
 }
 
 data class Lesson(val day: Int, val name: String, val period: Int)
@@ -159,6 +188,7 @@ data class FocusRecord(
     val completedAtMillis: Long,
 )
 
+val defaultHomeworkSubjects = listOf("语文", "数学", "英语")
 val homeworkSubjects = listOf("语文", "数学", "英语", "科学", "其他")
 
 fun inferSubject(taskName: String): String = homeworkSubjects
@@ -213,10 +243,42 @@ class LocalStore(context: Context) {
         preferences.edit { putInt("default_expected_minutes", minutes.coerceIn(1, 240)) }
     }
 
+    fun loadExpectedMinutes(subject: String): Int {
+        val key = "expected_minutes_${subject.trim()}"
+        return preferences.getInt(key, loadExpectedMinutes()).coerceIn(10, 99)
+    }
+
+    fun saveExpectedMinutes(subject: String, minutes: Int) {
+        val cleanedSubject = subject.trim()
+        if (cleanedSubject.isBlank()) return
+        preferences.edit { putInt("expected_minutes_$cleanedSubject", minutes.coerceIn(10, 99)) }
+    }
+
     fun loadNavigationStyle(): String = preferences.getString("navigation_style", "fresh") ?: "fresh"
 
     fun saveNavigationStyle(style: String) {
         preferences.edit { putString("navigation_style", style) }
+    }
+
+    fun loadVoiceWakeEnabled(): Boolean = preferences.getBoolean("voice_wake_enabled", false)
+
+    fun saveVoiceWakeEnabled(enabled: Boolean) {
+        preferences.edit { putBoolean("voice_wake_enabled", enabled) }
+    }
+
+    fun loadHomeworkSubjects(): List<String> {
+        val stored = preferences.getString("homework_subjects", null)
+            ?.split('|')
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.distinct()
+            .orEmpty()
+        return stored.ifEmpty { defaultHomeworkSubjects }
+    }
+
+    fun saveHomeworkSubjects(subjects: List<String>) {
+        val cleaned = subjects.map { it.replace("|", "").trim().take(8) }.filter { it.isNotBlank() }.distinct().take(9)
+        preferences.edit { putString("homework_subjects", cleaned.ifEmpty { defaultHomeworkSubjects }.joinToString("|")) }
     }
 
     fun loadWeatherRefreshMinutes(): Int =
@@ -238,6 +300,11 @@ class LocalStore(context: Context) {
                     humidity = preferences.getInt("weather_humidity", 0),
                     windSpeed = preferences.getFloat("weather_wind_speed", 0f).toDouble(),
                     weatherCode = preferences.getInt("weather_code", 0),
+                    apparentTemperature = preferences.getFloat(
+                        "weather_apparent_temperature",
+                        preferences.getFloat("weather_temperature", 0f),
+                    ).toDouble(),
+                    precipitation = preferences.getFloat("weather_precipitation", 0f).toDouble(),
                 ),
             ),
             updatedAtMillis = updatedAt,
@@ -251,8 +318,34 @@ class LocalStore(context: Context) {
             putInt("weather_humidity", cache.weather.info.humidity)
             putFloat("weather_wind_speed", cache.weather.info.windSpeed.toFloat())
             putInt("weather_code", cache.weather.info.weatherCode)
+            putFloat("weather_apparent_temperature", cache.weather.info.apparentTemperature.toFloat())
+            putFloat("weather_precipitation", cache.weather.info.precipitation.toFloat())
             putLong("weather_updated_at", cache.updatedAtMillis)
         }
+    }
+
+    fun loadManualWeatherCities(): List<WeatherCity> {
+        val raw = preferences.getString("manual_weather_cities", null) ?: return emptyList()
+        return runCatching {
+            val array = JSONArray(raw)
+            List(array.length()) { index ->
+                val item = array.getJSONObject(index)
+                WeatherCity(item.getString("name"), item.getDouble("latitude"), item.getDouble("longitude"))
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun saveManualWeatherCities(cities: List<WeatherCity>) {
+        val array = JSONArray()
+        cities.distinctBy { it.name }.take(8).forEach { city ->
+            array.put(
+                JSONObject()
+                    .put("name", city.name)
+                    .put("latitude", city.latitude)
+                    .put("longitude", city.longitude)
+            )
+        }
+        preferences.edit { putString("manual_weather_cities", array.toString()) }
     }
 
     fun loadFocusRecords(): List<FocusRecord> {
@@ -327,7 +420,7 @@ data class WeatherCache(val weather: LocatedWeather, val updatedAtMillis: Long)
 
 object DeviceWeatherRepository {
     @SuppressLint("MissingPermission")
-    suspend fun load(context: Context): LocatedWeather {
+    suspend fun locate(context: Context): WeatherCity {
         val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
         check(hasFine || hasCoarse) { "需要定位权限" }
@@ -354,8 +447,27 @@ object DeviceWeatherRepository {
             ?: address?.subAdminArea
             ?: address?.adminArea?.removeSuffix("市")
             ?: "当前位置"
-        val info = WeatherRepository.load(WeatherCity(placeName, location.latitude, location.longitude))
-        return LocatedWeather(placeName, info)
+        return WeatherCity(placeName.removeSuffix("市"), location.latitude, location.longitude)
+    }
+
+    suspend fun load(context: Context): LocatedWeather {
+        val city = locate(context)
+        return LocatedWeather(city.name, WeatherRepository.load(city))
+    }
+
+    fun geocodeCity(context: Context, query: String): WeatherCity {
+        val cleanName = query.trim().removeSuffix("市")
+        weatherCities.firstOrNull { it.name == cleanName }?.let { return it }
+        @Suppress("DEPRECATION")
+        val address = runCatching {
+            Geocoder(context, Locale.CHINA).getFromLocationName(cleanName, 1)?.firstOrNull()
+        }.getOrNull()
+        checkNotNull(address) { "没有找到这个城市，请检查名称" }
+        val displayName = address.locality
+            ?: address.subAdminArea
+            ?: address.adminArea
+            ?: cleanName
+        return WeatherCity(displayName.removeSuffix("市"), address.latitude, address.longitude)
     }
 
     @SuppressLint("MissingPermission")
@@ -375,6 +487,8 @@ data class WeatherInfo(
     val humidity: Int,
     val windSpeed: Double,
     val weatherCode: Int,
+    val apparentTemperature: Double = temperature,
+    val precipitation: Double = 0.0,
 ) {
     val description: String
         get() = when (weatherCode) {
@@ -391,11 +505,26 @@ data class WeatherInfo(
         }
 }
 
+data class DailyWeather(
+    val date: String,
+    val weatherCode: Int,
+    val minTemperature: Double,
+    val maxTemperature: Double,
+) {
+    val description: String get() = WeatherInfo(0.0, 0, 0.0, weatherCode).description
+}
+
+data class WeatherReport(val current: WeatherInfo, val daily: List<DailyWeather>)
+
 object WeatherRepository {
-    fun load(city: WeatherCity): WeatherInfo {
+    fun load(city: WeatherCity): WeatherInfo = loadReport(city).current
+
+    fun loadReport(city: WeatherCity): WeatherReport {
         val endpoint = "https://api.open-meteo.com/v1/forecast" +
             "?latitude=${city.latitude}&longitude=${city.longitude}" +
-            "&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m" +
+            "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,precipitation" +
+            "&daily=weather_code,temperature_2m_max,temperature_2m_min" +
+            "&forecast_days=5" +
             "&timezone=Asia%2FShanghai"
         val connection = URL(endpoint).openConnection() as HttpURLConnection
         connection.connectTimeout = 8_000
@@ -406,10 +535,26 @@ object WeatherRepository {
             if (connection.responseCode !in 200..299) error("天气服务返回 ${connection.responseCode}")
             val json = connection.inputStream.bufferedReader().use { it.readText() }
             val current = JSONObject(json).getJSONObject("current")
-            return WeatherInfo(
+            val weatherInfo = WeatherInfo(
                 current.getDouble("temperature_2m"), current.getInt("relative_humidity_2m"),
                 current.getDouble("wind_speed_10m"), current.getInt("weather_code"),
+                current.getDouble("apparent_temperature"),
+                current.getDouble("precipitation"),
             )
+            val daily = JSONObject(json).getJSONObject("daily")
+            val dates = daily.getJSONArray("time")
+            val codes = daily.getJSONArray("weather_code")
+            val minimums = daily.getJSONArray("temperature_2m_min")
+            val maximums = daily.getJSONArray("temperature_2m_max")
+            val forecasts = List(minOf(5, dates.length())) { index ->
+                DailyWeather(
+                    date = dates.getString(index),
+                    weatherCode = codes.getInt(index),
+                    minTemperature = minimums.getDouble(index),
+                    maxTemperature = maximums.getDouble(index),
+                )
+            }
+            return WeatherReport(weatherInfo, forecasts)
         } finally {
             connection.disconnect()
         }

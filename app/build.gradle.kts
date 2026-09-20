@@ -10,9 +10,12 @@ android {
     defaultConfig {
         applicationId = "com.handdict.studyassistant"
         minSdk = 28
-        targetSdk = 37
-        versionCode = 3
-        versionName = "0.2.1"
+        targetSdk = 36
+        versionCode = 4
+        versionName = "0.2.2"
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildFeatures {
@@ -41,6 +44,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
