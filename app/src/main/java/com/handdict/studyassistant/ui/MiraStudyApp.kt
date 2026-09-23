@@ -1,15 +1,19 @@
 package com.handdict.studyassistant.ui
 
 import android.Manifest
+import android.app.Activity
+import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
@@ -45,6 +49,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -112,8 +117,11 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.PathParser
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -121,18 +129,25 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.handdict.studyassistant.R
 import com.handdict.studyassistant.data.DictionaryEntry
 import com.handdict.studyassistant.data.DictionaryRepository
+import com.handdict.studyassistant.data.DEFAULT_DICTIONARY_DAILY_LIMIT
 import com.handdict.studyassistant.data.DeviceWeatherRepository
 import com.handdict.studyassistant.data.DailyWeather
 import com.handdict.studyassistant.data.FocusRecord
+import com.handdict.studyassistant.data.FOCUS_SUBJECT_MAX_MINUTES
 import com.handdict.studyassistant.data.Lesson
 import com.handdict.studyassistant.data.LocatedWeather
 import com.handdict.studyassistant.data.LocalStore
@@ -142,14 +157,17 @@ import com.handdict.studyassistant.data.WeatherCache
 import com.handdict.studyassistant.data.WeatherCity
 import com.handdict.studyassistant.data.WeatherReport
 import com.handdict.studyassistant.data.defaultHomeworkSubjects
+import com.handdict.studyassistant.data.maximumExpectedMinutes
 import com.handdict.studyassistant.data.WeatherRepository
 import com.handdict.studyassistant.timer.TimerAlarmScheduler
+import com.handdict.studyassistant.focus.TimePin
 import com.handdict.studyassistant.ui.theme.MiraBlue
 import com.handdict.studyassistant.ui.theme.MiraGreen
 import com.handdict.studyassistant.ui.theme.MiraNavy
 import com.handdict.studyassistant.ui.theme.MiraOrange
 import com.handdict.studyassistant.ui.theme.MiraSky
 import com.handdict.studyassistant.voice.WakeWordDetector
+import com.handdict.studyassistant.voice.WakeChimePlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -272,7 +290,29 @@ private fun subjectAccent(subject: String): Color = when (subject) {
 }
 
 private val screenItems = AppScreen.entries
+private val focusScreenItems = listOf(AppScreen.HOME, AppScreen.TIMER, AppScreen.DICTIONARY)
 private val cardShape = RoundedCornerShape(24.dp)
+
+private data class ParentGateRequest(val title: String, val action: () -> Unit)
+
+private fun enterSystemFocusMode(activity: Activity) {
+    val insets = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+    insets.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    insets.hide(WindowInsetsCompat.Type.systemBars())
+    val activityManager = activity.getSystemService(ActivityManager::class.java)
+    if (activityManager.lockTaskModeState == ActivityManager.LOCK_TASK_MODE_NONE) {
+        activity.startLockTask()
+    }
+}
+
+private fun leaveSystemFocusMode(activity: Activity) {
+    val activityManager = activity.getSystemService(ActivityManager::class.java)
+    if (activityManager.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
+        runCatching { activity.stopLockTask() }
+    }
+    WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+        .show(WindowInsetsCompat.Type.systemBars())
+}
 private val miraDisplayFont = FontFamily(Font(R.font.zcool_kuaile_regular))
 private val miraHandFont = FontFamily(Font(R.font.ma_shan_zheng_regular))
 private val miraKaiFont = FontFamily(Font(R.font.lxgw_wenkai_regular))
@@ -298,11 +338,14 @@ fun MiraStudyApp() {
     val context = LocalContext.current
     val store = remember { LocalStore(context.applicationContext) }
     var selected by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    // 不使用 rememberSaveable，避免系统恢复旧界面状态后绕过“启动即专注”。
+    var focusModeActive by remember { mutableStateOf(true) }
+    var parentGateRequest by remember { mutableStateOf<ParentGateRequest?>(null) }
     var pendingDictionaryQuery by rememberSaveable { mutableStateOf("") }
     var navigationStyleKey by rememberSaveable { mutableStateOf(store.loadNavigationStyle()) }
     var voiceWakeEnabled by rememberSaveable { mutableStateOf(store.loadVoiceWakeEnabled()) }
     var wakeState by remember { mutableStateOf(WakeWordDetector.State.IDLE) }
-    var appInForeground by remember { mutableStateOf(true) }
+    var appInForeground by remember { mutableStateOf(false) }
     var manualVoiceActive by remember { mutableStateOf(false) }
     var showWakeVoiceOverlay by remember { mutableStateOf(false) }
     var wakeListening by remember { mutableStateOf(false) }
@@ -311,10 +354,13 @@ fun MiraStudyApp() {
     var wakeLevel by remember { mutableFloatStateOf(0f) }
     var wakeTriggerEpoch by remember { mutableIntStateOf(0) }
     val navigationStyle = navigationStyleFor(navigationStyleKey)
+    LaunchedEffect(Unit) { store.saveFocusModeActive(true) }
+    val wakeChimePlayer = remember { WakeChimePlayer() }
     val wakeDetector = remember {
         WakeWordDetector(
             context = context.applicationContext,
             onWakeWord = {
+                wakeChimePlayer.play()
                 showWakeVoiceOverlay = true
                 wakeTranscript = "你好小智"
                 wakeError = null
@@ -410,6 +456,7 @@ fun MiraStudyApp() {
         onDispose {
             lifecycleOwner?.lifecycle?.removeObserver(observer)
             wakeDetector.release()
+            wakeChimePlayer.release()
         }
     }
     LaunchedEffect(voiceWakeEnabled, appInForeground, manualVoiceActive, showWakeVoiceOverlay) {
@@ -424,7 +471,8 @@ fun MiraStudyApp() {
     LaunchedEffect(wakeTriggerEpoch) {
         if (wakeTriggerEpoch > 0) {
             wakeDetector.stop()
-            delay(100)
+            // 等待短提示音播放完成，避免提示音被随后的语音识别误收进去。
+            delay(480)
             startWakeCommandRecognition()
         }
     }
@@ -436,6 +484,44 @@ fun MiraStudyApp() {
         wakeState == WakeWordDetector.State.LISTENING -> "正在等待“你好小智”"
         wakeState == WakeWordDetector.State.ERROR -> "启动失败，请关闭后重试"
         else -> "准备中"
+    }
+    val availableScreens = if (focusModeActive) focusScreenItems else screenItems
+
+    fun activateFocusMode() {
+        focusModeActive = true
+        store.saveFocusModeActive(true)
+    }
+
+    fun requestParentApproval(title: String, action: () -> Unit) {
+        parentGateRequest = ParentGateRequest(title, action)
+    }
+
+    fun deactivateFocusMode() {
+        requestParentApproval("是否退出专注模式？") {
+            focusModeActive = false
+            store.saveFocusModeActive(false)
+            (context as? Activity)?.let(::leaveSystemFocusMode)
+            selected = AppScreen.HOME
+        }
+    }
+
+    LaunchedEffect(focusModeActive) {
+        if (focusModeActive && selected !in focusScreenItems) selected = AppScreen.HOME
+    }
+    LaunchedEffect(focusModeActive, appInForeground) {
+        val activity = context as? Activity ?: return@LaunchedEffect
+        if (focusModeActive && appInForeground) {
+            // 自动启动时需等待 Activity 完成恢复，否则部分系统会忽略 startLockTask。
+            delay(500)
+            runCatching { enterSystemFocusMode(activity) }.onFailure {
+                Toast.makeText(context, "无法启动屏幕固定，请在系统设置中开启该功能", Toast.LENGTH_LONG).show()
+            }
+        } else if (!focusModeActive) {
+            leaveSystemFocusMode(activity)
+        }
+    }
+    BackHandler(enabled = focusModeActive) {
+        Toast.makeText(context, "专注模式中，请由家长退出", Toast.LENGTH_SHORT).show()
     }
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -452,10 +538,19 @@ fun MiraStudyApp() {
             )
             if (maxWidth >= 720.dp) {
                 Row(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                    TabletNavigation(selected = selected, style = navigationStyle, onSelected = { selected = it })
+                    TabletNavigation(
+                        selected = selected,
+                        style = navigationStyle,
+                        items = availableScreens,
+                        onSelected = { selected = it },
+                    )
                     Column(Modifier.fillMaxSize()) {
                         when (selected) {
-                            AppScreen.HOME -> HomeHeroHeader()
+                            AppScreen.HOME -> HomeHeroHeader(
+                                focusModeActive = focusModeActive,
+                                onActivateFocusMode = ::activateFocusMode,
+                                onDeactivateFocusMode = ::deactivateFocusMode,
+                            )
                             AppScreen.TIMER -> TimerHeroHeader(navigationStyle)
                             AppScreen.DICTIONARY -> DictionaryHeroHeader(navigationStyle)
                             AppScreen.SCHEDULE -> ScheduleHeroHeader(navigationStyle)
@@ -479,6 +574,8 @@ fun MiraStudyApp() {
                             voiceWakeStatus = wakeStatus,
                             onVoiceWakeEnabledChanged = ::setVoiceWakeEnabled,
                             onManualVoiceSessionChanged = { manualVoiceActive = it },
+                            focusModeActive = focusModeActive,
+                            onRequestParentApproval = ::requestParentApproval,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -486,7 +583,11 @@ fun MiraStudyApp() {
             } else {
                 Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                     when (selected) {
-                        AppScreen.HOME -> HomeHeroHeader()
+                        AppScreen.HOME -> HomeHeroHeader(
+                            focusModeActive = focusModeActive,
+                            onActivateFocusMode = ::activateFocusMode,
+                            onDeactivateFocusMode = ::deactivateFocusMode,
+                        )
                         AppScreen.TIMER -> TimerHeroHeader(navigationStyle)
                         AppScreen.DICTIONARY -> DictionaryHeroHeader(navigationStyle)
                         AppScreen.SCHEDULE -> ScheduleHeroHeader(navigationStyle)
@@ -510,9 +611,11 @@ fun MiraStudyApp() {
                         voiceWakeStatus = wakeStatus,
                         onVoiceWakeEnabledChanged = ::setVoiceWakeEnabled,
                         onManualVoiceSessionChanged = { manualVoiceActive = it },
+                        focusModeActive = focusModeActive,
+                        onRequestParentApproval = ::requestParentApproval,
                         modifier = Modifier.weight(1f),
                     )
-                    CompactNavigation(selected = selected, onSelected = { selected = it })
+                    CompactNavigation(selected = selected, items = availableScreens, onSelected = { selected = it })
                 }
             }
             if (showWakeVoiceOverlay) {
@@ -538,8 +641,76 @@ fun MiraStudyApp() {
                     modifier = Modifier.align(Alignment.Center),
                 )
             }
+            parentGateRequest?.let { request ->
+                TimePinDialog(
+                    title = request.title,
+                    message = "请输入家长 PIN 继续。",
+                    onDismiss = { parentGateRequest = null },
+                    onSubmit = { pin ->
+                        if (TimePin.verify(pin)) {
+                            parentGateRequest = null
+                            request.action()
+                            true
+                        } else {
+                            false
+                        }
+                    },
+                )
+            }
         }
     }
+}
+
+@Composable
+private fun TimePinDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onSubmit: (String) -> Boolean,
+) {
+    var pin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        delay(220)
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(
+                    value = pin,
+                    onValueChange = { pin = it.filter(Char::isDigit).take(4); error = null },
+                    modifier = Modifier.focusRequester(focusRequester),
+                    label = { Text("家长 PIN") },
+                    singleLine = true,
+                    isError = error != null,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 13.sp) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    error = when {
+                        pin.length != 4 -> "请输入 4 位家长 PIN"
+                        !onSubmit(pin) -> "PIN 不正确"
+                        else -> null
+                    }
+                },
+            ) { Text("确认") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    )
 }
 
 @Composable
@@ -615,13 +786,24 @@ private fun AppHeader(selected: AppScreen, navigationStyle: NavigationStyle) {
 }
 
 @Composable
-private fun HomeHeroHeader() {
+private fun HomeHeroHeader(
+    focusModeActive: Boolean,
+    onActivateFocusMode: () -> Unit,
+    onDeactivateFocusMode: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(178.dp),
     ) {
-        Column(Modifier.align(Alignment.CenterStart).padding(start = 30.dp, bottom = 1.dp)) {
+        Column(
+            Modifier.align(Alignment.CenterStart)
+                .combinedClickable(
+                    onClick = { if (!focusModeActive) onActivateFocusMode() },
+                    onLongClick = { if (focusModeActive) onDeactivateFocusMode() },
+                )
+                .padding(start = 30.dp, end = 24.dp, top = 10.dp, bottom = 10.dp),
+        ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Star, null, tint = Color(0xFFFFC437), modifier = Modifier.size(36.dp))
                 Spacer(Modifier.width(12.dp))
@@ -635,7 +817,12 @@ private fun HomeHeroHeader() {
             }
             Box(Modifier.padding(start = 56.dp, top = 2.dp).width(360.dp).height(5.dp).background(Color(0xFFFFCA3A), CircleShape))
             Row(Modifier.padding(start = 56.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("好好学习，遇见更棒的自己！", color = Color(0xFF496991), fontSize = 20.sp, fontFamily = miraHandFont)
+                Text(
+                    if (focusModeActive) "专注模式中 · 长按标题退出" else "好好学习，遇见更棒的自己！ · 点击进入专注",
+                    color = Color(0xFF496991),
+                    fontSize = 18.sp,
+                    fontFamily = miraHandFont,
+                )
                 Spacer(Modifier.width(13.dp))
                 Icon(Icons.Rounded.SentimentSatisfiedAlt, null, tint = Color(0xFF6C7E9D), modifier = Modifier.size(29.dp))
             }
@@ -784,14 +971,19 @@ private fun WeatherHeroHeader(navigationStyle: NavigationStyle) {
 }
 
 @Composable
-private fun TabletNavigation(selected: AppScreen, style: NavigationStyle, onSelected: (AppScreen) -> Unit) {
+private fun TabletNavigation(
+    selected: AppScreen,
+    style: NavigationStyle,
+    items: List<AppScreen>,
+    onSelected: (AppScreen) -> Unit,
+) {
     Column(
         modifier = Modifier
             .width(132.dp)
             .fillMaxHeight()
             .padding(horizontal = 11.dp, vertical = 15.dp),
     ) {
-        screenItems.forEach { item ->
+        items.forEach { item ->
             val isSelected = item == selected
             val accent = if (style == NavigationStyle.COLORFUL) screenAccent(item) else when (style) {
                 NavigationStyle.JOURNAL -> MiraGreen
@@ -859,12 +1051,12 @@ private fun NavigationClockIcon(circleColor: Color, handColor: Color) {
 }
 
 @Composable
-private fun CompactNavigation(selected: AppScreen, onSelected: (AppScreen) -> Unit) {
+private fun CompactNavigation(selected: AppScreen, items: List<AppScreen>, onSelected: (AppScreen) -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().background(Color.White).padding(6.dp),
         horizontalArrangement = Arrangement.SpaceEvenly,
     ) {
-        screenItems.forEach { item ->
+        items.forEach { item ->
             TextButton(onClick = { onSelected(item) }) {
                 Text("${item.symbol} ${item.label}", color = if (item == selected) MiraBlue else MiraNavy)
             }
@@ -884,14 +1076,25 @@ private fun ScreenContent(
     voiceWakeStatus: String,
     onVoiceWakeEnabledChanged: (Boolean) -> Unit,
     onManualVoiceSessionChanged: (Boolean) -> Unit,
+    focusModeActive: Boolean,
+    onRequestParentApproval: (String, () -> Unit) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(modifier.fillMaxSize().padding(start = 22.dp, end = 24.dp, bottom = 22.dp)) {
         when (screen) {
-            AppScreen.HOME -> HomeScreen(onNavigate, onOpenDictionary, onManualVoiceSessionChanged, navigationStyle)
+            AppScreen.HOME -> HomeScreen(
+                onNavigate = onNavigate,
+                onOpenDictionary = onOpenDictionary,
+                onVoiceSessionChanged = onManualVoiceSessionChanged,
+                navigationStyle = navigationStyle,
+                focusModeActive = focusModeActive,
+                onRequestParentApproval = onRequestParentApproval,
+            )
             AppScreen.TIMER -> TimerScreen(
                 navigationStyle = navigationStyle,
                 onOpenSettings = { onNavigate(AppScreen.SETTINGS) },
+                focusModeActive = focusModeActive,
+                onRequestParentApproval = onRequestParentApproval,
             )
             AppScreen.DICTIONARY -> DictionaryScreen(initialQuery = dictionaryQuery, onVoiceSessionChanged = onManualVoiceSessionChanged)
             AppScreen.SCHEDULE -> ScheduleScreen()
@@ -902,6 +1105,7 @@ private fun ScreenContent(
                 voiceWakeEnabled = voiceWakeEnabled,
                 voiceWakeStatus = voiceWakeStatus,
                 onVoiceWakeEnabledChanged = onVoiceWakeEnabledChanged,
+                onRequestParentApproval = onRequestParentApproval,
             )
         }
     }
@@ -939,6 +1143,8 @@ private fun HomeScreen(
     onOpenDictionary: (String) -> Unit,
     onVoiceSessionChanged: (Boolean) -> Unit,
     navigationStyle: NavigationStyle,
+    focusModeActive: Boolean,
+    onRequestParentApproval: (String, () -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     val todayIndex = LocalDate.now().dayOfWeek.value - 1
@@ -977,10 +1183,38 @@ private fun HomeScreen(
     val homeNotificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) Toast.makeText(context, "未开启通知权限，计时仍会继续", Toast.LENGTH_SHORT).show()
     }
-    LaunchedEffect(homeTimerRunning, homeStartedAtMillis, homeSessionBaseSeconds) {
+    LaunchedEffect(homeTimerRunning, homeStartedAtMillis, homeSessionBaseSeconds, focusModeActive) {
         while (homeTimerRunning) {
             homeElapsedSeconds = homeSessionBaseSeconds +
                 ((System.currentTimeMillis() - homeStartedAtMillis) / 1000).toInt().coerceAtLeast(0)
+            if (focusModeActive && homeElapsedSeconds >= FOCUS_SUBJECT_MAX_MINUTES * 60) {
+                val completedAt = System.currentTimeMillis()
+                val completedSubject = selectedSubject
+                store.addFocusRecord(
+                    FocusRecord(
+                        completedAt,
+                        "${completedSubject}作业",
+                        completedSubject,
+                        FOCUS_SUBJECT_MAX_MINUTES,
+                        completedAt,
+                    ),
+                )
+                homeTimerRunning = false
+                homeElapsedSeconds = 0
+                homeSessionBaseSeconds = 0
+                homeStartedAtMillis = 0L
+                TimerAlarmScheduler.cancel(context)
+                val nextIndex = (defaultHomeworkSubjects.indexOf(completedSubject) + 1) % defaultHomeworkSubjects.size
+                selectedSubject = defaultHomeworkSubjects[nextIndex]
+                expectedMinutes = store.loadExpectedMinutes(selectedSubject).coerceAtMost(FOCUS_SUBJECT_MAX_MINUTES)
+                store.saveTimer(TimerSnapshot("${selectedSubject}作业", selectedSubject, expectedMinutes, 0, false, 0L))
+                Toast.makeText(
+                    context,
+                    "$completedSubject 已达到 60 分钟，已自动结束并切换到 $selectedSubject",
+                    Toast.LENGTH_LONG,
+                ).show()
+                break
+            }
             delay(500)
         }
     }
@@ -1220,7 +1454,13 @@ private fun HomeScreen(
                             }
                         }
                         Button(
-                            onClick = { toggleHomeTimer() },
+                            onClick = {
+                                if (homeTimerRunning && focusModeActive) {
+                                    onRequestParentApproval("暂停计时") { toggleHomeTimer() }
+                                } else {
+                                    toggleHomeTimer()
+                                }
+                            },
                             modifier = Modifier.fillMaxWidth().height(54.dp),
                             shape = RoundedCornerShape(28.dp),
                             colors = ButtonDefaults.buttonColors(
@@ -1303,7 +1543,10 @@ private fun HomeScreen(
         }
 
         Column(Modifier.weight(1.08f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            MiraCard(Modifier.fillMaxWidth().weight(1.5f), onClick = { onNavigate(AppScreen.SCHEDULE) }) {
+            MiraCard(
+                Modifier.fillMaxWidth().weight(1.5f),
+                onClick = if (focusModeActive) null else ({ onNavigate(AppScreen.SCHEDULE) }),
+            ) {
                 Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF1F8FF), Color.White))).padding(20.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         NavigationStyleIcon(navigationStyle, AppScreen.SCHEDULE, Modifier.size(58.dp))
@@ -1314,8 +1557,14 @@ private fun HomeScreen(
                         }
                         Spacer(Modifier.weight(1f))
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("完整课表", color = Color(0xFF458FE6), fontSize = 13.sp)
-                            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Color(0xFF458FE6), modifier = Modifier.size(18.dp))
+                            Text(
+                                if (focusModeActive) "专注时仅预览" else "完整课表",
+                                color = if (focusModeActive) Color(0xFF8292A7) else Color(0xFF458FE6),
+                                fontSize = 13.sp,
+                            )
+                            if (!focusModeActive) {
+                                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = Color(0xFF458FE6), modifier = Modifier.size(18.dp))
+                            }
                         }
                     }
                     Spacer(Modifier.height(10.dp))
@@ -1651,7 +1900,12 @@ private fun HomeLessonRow(period: Int, lesson: Lesson?, modifier: Modifier = Mod
 }
 
 @Composable
-private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> Unit) {
+private fun TimerScreen(
+    navigationStyle: NavigationStyle,
+    onOpenSettings: () -> Unit,
+    focusModeActive: Boolean,
+    onRequestParentApproval: (String, () -> Unit) -> Unit,
+) {
     val context = LocalContext.current
     val store = remember { LocalStore(context) }
     val snapshot = remember { store.loadTimer() }
@@ -1659,14 +1913,17 @@ private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> 
     val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) Toast.makeText(context, "未开启通知权限，计时仍可使用，但后台结束时不会弹出提醒", Toast.LENGTH_LONG).show()
     }
-    val configuredSubjects = remember { store.loadHomeworkSubjects() }
+    val configuredSubjects = remember(focusModeActive) {
+        if (focusModeActive) defaultHomeworkSubjects else store.loadHomeworkSubjects()
+    }
     var subject by rememberSaveable {
         mutableStateOf(snapshot.subject.takeIf { it in configuredSubjects } ?: configuredSubjects.first())
     }
     var expectedMinutes by rememberSaveable {
         mutableIntStateOf(
-            if (snapshot.running || snapshot.elapsedSeconds > 0) snapshot.expectedMinutes
-            else store.loadExpectedMinutes(snapshot.subject.takeIf { it in configuredSubjects } ?: configuredSubjects.first()),
+            (if (snapshot.running || snapshot.elapsedSeconds > 0) snapshot.expectedMinutes
+            else store.loadExpectedMinutes(snapshot.subject.takeIf { it in configuredSubjects } ?: configuredSubjects.first()))
+                .coerceAtMost(if (focusModeActive) FOCUS_SUBJECT_MAX_MINUTES else 99),
         )
     }
     val restoredElapsed = snapshot.elapsedSeconds + if (snapshot.running && snapshot.startedAtMillis > 0L) {
@@ -1677,13 +1934,6 @@ private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> 
     var running by rememberSaveable { mutableStateOf(snapshot.running) }
     var startedAtMillis by rememberSaveable {
         mutableLongStateOf(if (snapshot.running) snapshot.startedAtMillis else 0L)
-    }
-
-    LaunchedEffect(running, startedAtMillis, sessionBaseSeconds) {
-        while (running) {
-            elapsedSeconds = sessionBaseSeconds + ((System.currentTimeMillis() - startedAtMillis) / 1000).toInt().coerceAtLeast(0)
-            delay(500)
-        }
     }
 
     fun saveCurrent() = store.saveTimer(
@@ -1725,21 +1975,53 @@ private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> 
         saveCurrent()
     }
 
-    fun completeTimer() {
+    fun completeTimer(autoAdvance: Boolean = false) {
         val completedAt = System.currentTimeMillis()
         if (running) {
             elapsedSeconds = sessionBaseSeconds + ((completedAt - startedAtMillis) / 1000).toInt().coerceAtLeast(0)
         }
+        if (focusModeActive) elapsedSeconds = elapsedSeconds.coerceAtMost(FOCUS_SUBJECT_MAX_MINUTES * 60)
         val actualMinutes = max(1, (elapsedSeconds + 59) / 60)
+            .coerceAtMost(if (focusModeActive) FOCUS_SUBJECT_MAX_MINUTES else Int.MAX_VALUE)
+        val completedSubject = subject
         running = false
         startedAtMillis = 0L
         TimerAlarmScheduler.cancel(context)
-        store.addFocusRecord(FocusRecord(completedAt, "${subject}作业", subject, actualMinutes, completedAt))
+        store.addFocusRecord(FocusRecord(completedAt, "${completedSubject}作业", completedSubject, actualMinutes, completedAt))
         records.clear()
         records.addAll(store.loadFocusRecords())
         elapsedSeconds = 0
         sessionBaseSeconds = 0
+        if (autoAdvance && focusModeActive) {
+            val nextIndex = (configuredSubjects.indexOf(completedSubject) + 1) % configuredSubjects.size
+            subject = configuredSubjects[nextIndex]
+            expectedMinutes = store.loadExpectedMinutes(subject).coerceAtMost(FOCUS_SUBJECT_MAX_MINUTES)
+        }
         saveCurrent()
+        if (autoAdvance) {
+            Toast.makeText(context, "$completedSubject 已达到 60 分钟，已自动结束并切换到 $subject", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    LaunchedEffect(focusModeActive) {
+        if (focusModeActive) {
+            if (subject !in configuredSubjects) subject = configuredSubjects.first()
+            expectedMinutes = store.loadExpectedMinutes(subject).coerceAtMost(FOCUS_SUBJECT_MAX_MINUTES)
+            saveCurrent()
+        }
+    }
+
+    LaunchedEffect(running, startedAtMillis, sessionBaseSeconds, focusModeActive) {
+        while (running) {
+            elapsedSeconds = sessionBaseSeconds +
+                ((System.currentTimeMillis() - startedAtMillis) / 1000).toInt().coerceAtLeast(0)
+            if (focusModeActive && elapsedSeconds >= FOCUS_SUBJECT_MAX_MINUTES * 60) {
+                elapsedSeconds = FOCUS_SUBJECT_MAX_MINUTES * 60
+                completeTimer(autoAdvance = true)
+                break
+            }
+            delay(500)
+        }
     }
 
     Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -1759,6 +2041,7 @@ private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> 
                                 enabled = !running,
                                 onClick = {
                                     val subjectExpectedMinutes = store.loadExpectedMinutes(item)
+                                        .coerceAtMost(if (focusModeActive) FOCUS_SUBJECT_MAX_MINUTES else 99)
                                     subject = item
                                     expectedMinutes = subjectExpectedMinutes
                                     store.saveTimer(
@@ -1778,25 +2061,40 @@ private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> 
                     Spacer(Modifier.weight(1f))
                     HorizontalDivider(color = Color(0xFFE8EDF3))
                     Spacer(Modifier.weight(1f))
-                    Surface(
-                        onClick = onOpenSettings,
-                        modifier = Modifier.fillMaxWidth(),
-                        color = Color(0xFFF2F7FF),
-                        shape = RoundedCornerShape(16.dp),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFD8E6F7)),
-                    ) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Image(
-                                painterResource(R.drawable.mira_settings_group_timer),
-                                contentDescription = null,
-                                modifier = Modifier.size(34.dp),
-                            )
-                            Spacer(Modifier.width(9.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("设置科目预计时间", color = MiraNavy, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                                Text("当前 $subject · $expectedMinutes 分钟", color = Color(0xFF6A7E98), fontSize = 11.sp)
+                    if (focusModeActive) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFFFEEE9),
+                            shape = RoundedCornerShape(16.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFF3B7A8)),
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Rounded.Star, null, tint = Color(0xFFE06A4E))
+                                Spacer(Modifier.width(9.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text("专注模式已开启", color = MiraNavy, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                                    Text("仅开放首页、计时和字典 · 每科最多 60 分钟", color = Color(0xFF7C665F), fontSize = 11.sp)
+                                }
+                                Text("长按首页标题退出", color = Color(0xFFE06A4E), fontWeight = FontWeight.Bold, fontSize = 12.sp)
                             }
-                            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = MiraBlue)
+                        }
+                    } else {
+                        Surface(
+                            onClick = onOpenSettings,
+                            modifier = Modifier.fillMaxWidth(),
+                            color = Color(0xFFF2F7FF),
+                            shape = RoundedCornerShape(16.dp),
+                        ) {
+                            Text(
+                                "设置预计时间 · 点首页标题进入专注模式",
+                                Modifier.padding(horizontal = 12.dp, vertical = 13.dp),
+                                color = MiraNavy,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center,
+                            )
                         }
                     }
                 }
@@ -1853,7 +2151,13 @@ private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> 
                         }
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             Button(
-                                onClick = { toggleTimer() },
+                                onClick = {
+                                    if (running && focusModeActive) {
+                                        onRequestParentApproval("暂停计时") { toggleTimer() }
+                                    } else {
+                                        toggleTimer()
+                                    }
+                                },
                                 modifier = Modifier.weight(1f).height(56.dp),
                                 shape = RoundedCornerShape(28.dp),
                                 colors = ButtonDefaults.buttonColors(
@@ -1865,7 +2169,10 @@ private fun TimerScreen(navigationStyle: NavigationStyle, onOpenSettings: () -> 
                                 Text(if (running) "暂停" else "开始", fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             }
                             Button(
-                                onClick = { resetTimer() },
+                                onClick = {
+                                    if (focusModeActive) onRequestParentApproval("重置计时") { resetTimer() }
+                                    else resetTimer()
+                                },
                                 modifier = Modifier.weight(1f).height(56.dp),
                                 shape = RoundedCornerShape(28.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6682A6)),
@@ -2083,6 +2390,7 @@ private fun SettingsScreen(
     voiceWakeEnabled: Boolean,
     voiceWakeStatus: String,
     onVoiceWakeEnabledChanged: (Boolean) -> Unit,
+    onRequestParentApproval: (String, () -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     val store = remember { LocalStore(context) }
@@ -2093,9 +2401,13 @@ private fun SettingsScreen(
         mutableIntStateOf(((store.loadWeatherRefreshMinutes() + 59) / 60).coerceIn(1, 12))
     }
     var newSubject by rememberSaveable { mutableStateOf("") }
+    var dictionaryDailyLimit by rememberSaveable { mutableIntStateOf(store.loadDictionaryDailyLimit()) }
+    var showDictionaryLimitEditor by remember { mutableStateOf(false) }
+    var dictionaryLimitDraft by remember { mutableIntStateOf(dictionaryDailyLimit) }
+    val expectedMaximum = maximumExpectedMinutes(expectedSubject)
 
     fun updateExpected(minutes: Int) {
-        expectedMinutes = minutes.coerceIn(10, 99)
+        expectedMinutes = minutes.coerceIn(10, expectedMaximum)
         store.saveExpectedMinutes(expectedSubject, expectedMinutes)
         val timer = store.loadTimer()
         if (timer.subject == expectedSubject && !timer.running && timer.elapsedSeconds == 0) {
@@ -2134,14 +2446,18 @@ private fun SettingsScreen(
                             Surface(color = Color(0xFFFFF4D7), shape = RoundedCornerShape(15.dp)) {
                                 Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
                                     Text("${expectedSubject}预计完成时间", color = Color(0xFF7B5721), fontWeight = FontWeight.Black, fontSize = 14.sp)
-                                    Text("范围 10–99 分钟；到时会提醒，计时不会停止。", color = Color(0xFF826F54), fontSize = 10.sp)
+                                    Text(
+                                        "范围 10–$expectedMaximum 分钟；专注模式下最多 60 分钟。",
+                                        color = Color(0xFF826F54),
+                                        fontSize = 10.sp,
+                                    )
                                 }
                             }
                         }
                         Spacer(Modifier.width(12.dp))
                         CircularValueSlider(
                             value = expectedMinutes,
-                            valueRange = 10..99,
+                            valueRange = 10..expectedMaximum,
                             onValueChange = ::updateExpected,
                             unit = "分钟",
                             color = subjectAccent(expectedSubject),
@@ -2188,11 +2504,37 @@ private fun SettingsScreen(
                 Column(
                     Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFF2FAFF), Color.White))).padding(20.dp),
                 ) {
-                    SettingsCardTitle(R.drawable.mira_settings_group_common, "常用设置", "天气刷新与语音唤醒")
+                    SettingsCardTitle(
+                        iconRes = R.drawable.mira_settings_group_common,
+                        title = "常用设置",
+                        subtitle = "天气、查字次数与语音唤醒",
+                        action = {
+                            Surface(
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+                                    }.onFailure {
+                                        Toast.makeText(context, "请在系统默认应用中更换桌面", Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                                color = Color(0xFF7B72E9),
+                                shape = RoundedCornerShape(50),
+                            ) {
+                                Text(
+                                    "更换系统桌面",
+                                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 5.dp),
+                                    color = Color.White,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        },
+                    )
                     Spacer(Modifier.height(7.dp))
                     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text("天气刷新", color = MiraNavy, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(6.dp))
                             CircularValueSlider(
                                 value = weatherRefreshHours,
                                 valueRange = 1..12,
@@ -2202,35 +2544,77 @@ private fun SettingsScreen(
                                 },
                                 unit = "小时",
                                 color = Color(0xFF49A5E8),
-                                modifier = Modifier.size(128.dp),
+                                modifier = Modifier.size(112.dp),
                             )
                         }
-                        Spacer(Modifier.width(14.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Surface(
+                            onClick = {
+                                onRequestParentApproval("修改今日查字次数") {
+                                    dictionaryLimitDraft = dictionaryDailyLimit
+                                    showDictionaryLimitEditor = true
+                                }
+                            },
+                            modifier = Modifier.width(145.dp).fillMaxHeight(),
+                            color = Color(0xFFFFF4D7),
+                            shape = RoundedCornerShape(18.dp),
+                        ) {
+                            Column(
+                                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center,
+                            ) {
+                                Text("今日查字上限", color = Color(0xFF7B5721), fontWeight = FontWeight.Black, fontSize = 13.sp)
+                                Text(dictionaryDailyLimit.toString(), color = Color(0xFFE18B25), fontSize = 34.sp, fontWeight = FontWeight.Black)
+                                Text(
+                                    "已用 ${store.loadDictionaryLookupWords().size} 次 · 点击修改",
+                                    color = Color(0xFF826F54),
+                                    fontSize = 9.sp,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
                         Surface(
                             modifier = Modifier.weight(1f),
                             color = Color(0xFFEAF8F1),
                             shape = RoundedCornerShape(18.dp),
                         ) {
-                            Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp)) {
+                            Column(
+                                Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.Center,
+                            ) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Surface(color = Color.White, shape = CircleShape, modifier = Modifier.size(42.dp)) {
+                                    Surface(color = Color.White, shape = CircleShape, modifier = Modifier.size(36.dp)) {
                                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                            Icon(Icons.Rounded.Mic, null, tint = Color(0xFF239D70), modifier = Modifier.size(23.dp))
+                                            Icon(Icons.Rounded.Mic, null, tint = Color(0xFF239D70), modifier = Modifier.size(20.dp))
                                         }
                                     }
-                                    Spacer(Modifier.width(10.dp))
-                                    Column(Modifier.weight(1f)) {
-                                        Text("小智语音唤醒", color = MiraNavy, fontWeight = FontWeight.Black, fontSize = 15.sp)
-                                        Text(voiceWakeStatus, color = if (voiceWakeEnabled) MiraGreen else Color(0xFF718097), fontSize = 10.sp)
-                                    }
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "你好小智",
+                                        color = MiraNavy,
+                                        fontWeight = FontWeight.Black,
+                                        fontSize = 14.sp,
+                                        maxLines = 1,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                Spacer(Modifier.height(7.dp))
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "语音唤醒 · $voiceWakeStatus",
+                                        color = if (voiceWakeEnabled) MiraGreen else Color(0xFF718097),
+                                        fontSize = 9.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
                                     Switch(
                                         checked = voiceWakeEnabled,
                                         onCheckedChange = onVoiceWakeEnabledChanged,
                                         colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = MiraGreen),
                                     )
                                 }
-                                Spacer(Modifier.height(5.dp))
-                                Text("App 前台时，说“你好小智”即可直接提问。", color = Color(0xFF718097), fontSize = 10.sp)
                             }
                         }
                     }
@@ -2303,15 +2687,61 @@ private fun SettingsScreen(
             }
         }
     }
+    if (showDictionaryLimitEditor) {
+        AlertDialog(
+            onDismissRequest = { showDictionaryLimitEditor = false },
+            title = { Text("设置今日查字次数") },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        "沿圆环拖动设置次数，仅在今天有效；明天自动恢复为 $DEFAULT_DICTIONARY_DAILY_LIMIT 次。",
+                        textAlign = TextAlign.Center,
+                    )
+                    CircularValueSlider(
+                        value = dictionaryLimitDraft,
+                        valueRange = 1..200,
+                        onValueChange = { dictionaryLimitDraft = it },
+                        unit = "次",
+                        color = Color(0xFFE9A12D),
+                        modifier = Modifier.size(210.dp),
+                    )
+                    Text("今日已查询 ${store.loadDictionaryLookupWords().size} 个不同词条", color = Color(0xFF718097), fontSize = 12.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val limit = dictionaryLimitDraft.coerceIn(1, 200)
+                    dictionaryDailyLimit = limit
+                    store.saveDictionaryDailyLimit(limit)
+                    showDictionaryLimitEditor = false
+                }) { Text("保存") }
+            },
+            dismissButton = { TextButton(onClick = { showDictionaryLimitEditor = false }) { Text("取消") } },
+        )
+    }
 }
 
 @Composable
-private fun SettingsCardTitle(iconRes: Int, title: String, subtitle: String) {
+private fun SettingsCardTitle(
+    iconRes: Int,
+    title: String,
+    subtitle: String,
+    action: (@Composable () -> Unit)? = null,
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Image(painterResource(iconRes), null, Modifier.size(48.dp), contentScale = ContentScale.Fit)
         Spacer(Modifier.width(10.dp))
-        Column {
-            Text(title, color = MiraNavy, fontSize = 20.sp, fontWeight = FontWeight.Black)
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(title, color = MiraNavy, fontSize = 20.sp, fontWeight = FontWeight.Black)
+                if (action != null) {
+                    Spacer(Modifier.width(9.dp))
+                    action()
+                }
+            }
             Text(subtitle, color = Color(0xFF718097), fontSize = 11.sp)
         }
     }
@@ -2450,6 +2880,7 @@ private fun DictionaryScreen(
 ) {
     val context = LocalContext.current
     val repository = remember { DictionaryRepository(context.applicationContext) }
+    val store = remember { LocalStore(context.applicationContext) }
     var query by rememberSaveable { mutableStateOf("") }
     var entry by remember { mutableStateOf<DictionaryEntry?>(null) }
     var results by remember { mutableStateOf<List<DictionaryEntry>>(emptyList()) }
@@ -2460,6 +2891,9 @@ private fun DictionaryScreen(
     var voiceError by remember { mutableStateOf<String?>(null) }
     var voiceLevel by remember { mutableFloatStateOf(0f) }
     var showMeaningDetails by rememberSaveable { mutableStateOf(false) }
+    var dictionaryLimit by remember { mutableIntStateOf(store.loadDictionaryDailyLimit()) }
+    var lookupWords by remember { mutableStateOf(store.loadDictionaryLookupWords()) }
+    var quotaExceeded by remember { mutableStateOf(false) }
     LaunchedEffect(initialQuery) {
         if (initialQuery.isNotBlank()) query = initialQuery
     }
@@ -2541,12 +2975,32 @@ private fun DictionaryScreen(
         }
     }
 
+    fun selectDictionaryEntry(candidate: DictionaryEntry): Boolean {
+        dictionaryLimit = store.loadDictionaryDailyLimit()
+        if (query.isBlank() || store.recordDictionaryLookup(candidate.word)) {
+            lookupWords = store.loadDictionaryLookupWords()
+            quotaExceeded = false
+            entry = candidate
+            return true
+        }
+        quotaExceeded = true
+        entry = null
+        Toast.makeText(context, "今天的查字次数已用完", Toast.LENGTH_SHORT).show()
+        return false
+    }
+
     LaunchedEffect(query) {
-        delay(120)
+        delay(600)
         loading = true
         val found = withContext(Dispatchers.IO) { repository.search(query) }
         results = found
-        entry = found.firstOrNull()
+        val first = found.firstOrNull()
+        if (first == null) {
+            entry = null
+            quotaExceeded = false
+        } else {
+            selectDictionaryEntry(first)
+        }
         loading = false
     }
 
@@ -2584,6 +3038,18 @@ private fun DictionaryScreen(
                 singleLine = true,
             )
             Surface(
+                color = if (lookupWords.size >= dictionaryLimit) Color(0xFFFFECE8) else Color(0xFFE9F8EF),
+                shape = RoundedCornerShape(20.dp),
+            ) {
+                Text(
+                    "今日 ${lookupWords.size}/$dictionaryLimit",
+                    Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    color = if (lookupWords.size >= dictionaryLimit) Color(0xFFC4553E) else Color(0xFF168458),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                )
+            }
+            Surface(
                 onClick = { requestDictionaryVoiceSearch() },
                 enabled = !listening,
                 modifier = Modifier.width(168.dp).height(52.dp),
@@ -2608,7 +3074,7 @@ private fun DictionaryScreen(
                 results.forEach { result ->
                     val chosen = selectedEntry?.word == result.word
                     Surface(
-                        onClick = { entry = result },
+                        onClick = { selectDictionaryEntry(result) },
                         shape = RoundedCornerShape(16.dp),
                         color = if (chosen) Color(0xFFD9F2FF) else Color.White,
                         border = androidx.compose.foundation.BorderStroke(1.dp, if (chosen) Color(0xFF4AA8F5) else Color(0xFFDDE8F2)),
@@ -2624,7 +3090,19 @@ private fun DictionaryScreen(
         } else {
             Spacer(Modifier.height(10.dp))
         }
-        if (!loading && selectedEntry == null) {
+        if (!loading && quotaExceeded) {
+            MiraCard(Modifier.fillMaxSize()) {
+                Column(
+                    Modifier.fillMaxSize().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    Text("今天已经查询了 $dictionaryLimit 个生字", color = MiraNavy, fontSize = 24.sp, fontWeight = FontWeight.Black)
+                    Spacer(Modifier.height(10.dp))
+                    Text("明天会自动恢复到 20 次；家长也可以在设置中修改今天的次数。", color = Color(0xFF6A7A91), fontSize = 16.sp)
+                }
+            }
+        } else if (!loading && selectedEntry == null) {
             MiraCard(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("内置字典暂未找到“$query”", color = Color(0xFF6A7A91), fontSize = 20.sp)
@@ -3018,6 +3496,7 @@ private fun ScheduleScreen() {
     var addPeriod by remember { mutableIntStateOf(1) }
     var editingLesson by remember { mutableStateOf<Lesson?>(null) }
     var deletingLesson by remember { mutableStateOf<Lesson?>(null) }
+    var showBulkEditor by remember { mutableStateOf(false) }
     var hasPendingChanges by rememberSaveable { mutableStateOf(false) }
     val weekdays = listOf("周一", "周二", "周三", "周四", "周五")
     val dayLessons = lessons.filter { it.day == selectedDay }.sortedBy { it.period }
@@ -3040,19 +3519,16 @@ private fun ScheduleScreen() {
                 }
             }
             Surface(
-                onClick = {
-                    addPeriod = (1..12).firstOrNull { period -> dayLessons.none { it.period == period } } ?: 1
-                    showAdd = true
-                },
+                onClick = { showBulkEditor = true },
                 modifier = Modifier.width(180.dp).fillMaxHeight(),
                 color = Color(0xFF4DBA6C),
                 shape = RoundedCornerShape(18.dp),
                 shadowElevation = 4.dp,
             ) {
                 Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text("＋", color = Color.White, fontSize = 35.sp, fontWeight = FontWeight.Bold)
+                    Text("▦", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.width(7.dp))
-                    Text("添加课程", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Black)
+                    Text("批量排课", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.Black)
                 }
             }
             Surface(
@@ -3165,6 +3641,20 @@ private fun ScheduleScreen() {
             }
         })
     }
+    if (showBulkEditor) {
+        BulkScheduleEditor(
+            initialLessons = lessons,
+            onDismiss = { showBulkEditor = false },
+            onSave = { updated ->
+                lessons.clear()
+                lessons.addAll(updated.sortedWith(compareBy<Lesson> { it.day }.thenBy { it.period }))
+                store.saveLessons(lessons)
+                hasPendingChanges = false
+                showBulkEditor = false
+                Toast.makeText(context, "整周课表已保存", Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
     editingLesson?.let { original ->
         LessonDialog(day = original.day, initial = original, initialPeriod = original.period, onDismiss = { editingLesson = null }, onDelete = {
             editingLesson = null
@@ -3194,6 +3684,209 @@ private fun ScheduleScreen() {
             },
             dismissButton = { TextButton(onClick = { deletingLesson = null }) { Text("取消") } },
         )
+    }
+}
+
+@Composable
+private fun BulkScheduleEditor(
+    initialLessons: List<Lesson>,
+    onDismiss: () -> Unit,
+    onSave: (List<Lesson>) -> Unit,
+) {
+    val weekdays = listOf("周一", "周二", "周三", "周四", "周五")
+    val commonSubjects = listOf(
+        "语文", "数学", "英语", "科学", "体育", "美术", "音乐",
+        "信息技术", "道法", "劳动", "班会", "社团", "选修", "竖笛",
+    )
+    val subjects = remember(initialLessons) {
+        (commonSubjects + initialLessons.map { it.name }).map(String::trim).filter(String::isNotBlank).distinct()
+    }
+    val draft = remember(initialLessons) {
+        mutableStateListOf<Lesson>().also { it.addAll(initialLessons.filter { lesson -> lesson.day in 0..4 }) }
+    }
+    var selectedSubject by rememberSaveable { mutableStateOf(subjects.first()) }
+    var eraseMode by rememberSaveable { mutableStateOf(false) }
+
+    fun paintSlot(day: Int, period: Int) {
+        val existingIndex = draft.indexOfFirst { it.day == day && it.period == period }
+        if (eraseMode) {
+            if (existingIndex >= 0) draft.removeAt(existingIndex)
+        } else {
+            val lesson = Lesson(day, selectedSubject, period)
+            when {
+                existingIndex < 0 -> draft.add(lesson)
+                draft[existingIndex].name != selectedSubject -> draft[existingIndex] = lesson
+            }
+        }
+    }
+
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.94f).fillMaxHeight(0.91f),
+            shape = RoundedCornerShape(28.dp),
+            color = Color(0xFFFFFEFC),
+            shadowElevation = 16.dp,
+        ) {
+            Column(Modifier.fillMaxSize().padding(horizontal = 24.dp, vertical = 18.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column {
+                        Text("批量排课", color = MiraNavy, fontSize = 26.sp, fontWeight = FontWeight.Black)
+                        Text("选择科目后，点击格子或按住拖过多个格子即可连续填写。", color = Color(0xFF657A96), fontSize = 13.sp)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text("已安排 ${draft.size} 节", color = MiraGreen, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Surface(
+                        onClick = { eraseMode = true },
+                        color = if (eraseMode) Color(0xFFE76C61) else Color(0xFFFFECE9),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.2.dp, Color(0xFFE76C61)),
+                    ) {
+                        Text(
+                            "橡皮擦",
+                            Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+                            color = if (eraseMode) Color.White else Color(0xFFC94F45),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black,
+                        )
+                    }
+                    subjects.forEach { subject ->
+                        val selected = !eraseMode && selectedSubject == subject
+                        val accent = subjectAccent(subject)
+                        Surface(
+                            onClick = {
+                                selectedSubject = subject
+                                eraseMode = false
+                            },
+                            color = if (selected) accent else accent.copy(alpha = 0.11f),
+                            shape = RoundedCornerShape(16.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.2.dp, accent.copy(alpha = if (selected) 1f else 0.42f)),
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Image(painterResource(scheduleLessonIcon(subject)), null, Modifier.size(25.dp), contentScale = ContentScale.Fit)
+                                Spacer(Modifier.width(6.dp))
+                                Text(subject, color = if (selected) Color.White else accent, fontSize = 13.sp, fontWeight = FontWeight.Black)
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier.fillMaxWidth().weight(1f)
+                        .pointerInput(selectedSubject, eraseMode) {
+                            fun paintAt(position: Offset) {
+                                val columnWidth = size.width / 6f
+                                val rowHeight = size.height / 8f
+                                val day = (position.x / columnWidth).toInt() - 1
+                                val period = (position.y / rowHeight).toInt()
+                                if (day in 0..4 && period in 1..7) paintSlot(day, period)
+                            }
+                            detectDragGestures(
+                                onDragStart = ::paintAt,
+                                onDrag = { change, _ ->
+                                    change.consume()
+                                    paintAt(change.position)
+                                },
+                            )
+                        },
+                ) {
+                    Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            BulkScheduleCell("节次", null, true, Modifier.weight(1f).fillMaxHeight())
+                            weekdays.forEach { day ->
+                                BulkScheduleCell(day, null, true, Modifier.weight(1f).fillMaxHeight())
+                            }
+                        }
+                        (1..7).forEach { period ->
+                            Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                BulkScheduleCell("第${period}节", null, true, Modifier.weight(1f).fillMaxHeight())
+                                weekdays.indices.forEach { day ->
+                                    val lesson = draft.firstOrNull { it.day == day && it.period == period }
+                                    BulkScheduleCell(
+                                        label = lesson?.name ?: "＋",
+                                        lesson = lesson,
+                                        header = false,
+                                        modifier = Modifier.weight(1f).fillMaxHeight(),
+                                        onClick = { paintSlot(day, period) },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = { draft.clear() }) {
+                        Text("清空草稿", color = MaterialTheme.colorScheme.error)
+                    }
+                    Text("只有点击“保存整周课表”后才会写入。", color = Color(0xFF718097), fontSize = 12.sp)
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = { onSave(draft.toList()) },
+                        colors = ButtonDefaults.buttonColors(containerColor = MiraBlue),
+                        shape = RoundedCornerShape(18.dp),
+                    ) {
+                        Icon(Icons.Rounded.Check, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("保存整周课表", fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BulkScheduleCell(
+    label: String,
+    lesson: Lesson?,
+    header: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    val accent = lesson?.let { subjectAccent(it.name) } ?: MiraBlue
+    val content: @Composable () -> Unit = {
+        Box(Modifier.fillMaxSize().padding(horizontal = 4.dp), contentAlignment = Alignment.Center) {
+            if (lesson != null) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Image(painterResource(scheduleLessonIcon(lesson.name)), null, Modifier.size(24.dp), contentScale = ContentScale.Fit)
+                    Spacer(Modifier.width(5.dp))
+                    Text(label, color = accent, fontSize = 13.sp, fontWeight = FontWeight.Black, maxLines = 1)
+                }
+            } else {
+                Text(
+                    label,
+                    color = if (header) MiraNavy else Color(0xFF9AA7B8),
+                    fontSize = if (header) 14.sp else 18.sp,
+                    fontWeight = if (header) FontWeight.Black else FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+    val color = when {
+        header -> Color(0xFFEAF2FC)
+        lesson != null -> accent.copy(alpha = 0.12f)
+        else -> Color(0xFFF5F7FA)
+    }
+    if (onClick == null) {
+        Surface(modifier = modifier, color = color, shape = RoundedCornerShape(12.dp), content = content)
+    } else {
+        Surface(onClick = onClick, modifier = modifier, color = color, shape = RoundedCornerShape(12.dp), content = content)
     }
 }
 

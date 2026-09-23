@@ -20,6 +20,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.Normalizer
+import java.time.LocalDate
 import java.util.Locale
 import kotlin.coroutines.resume
 
@@ -190,6 +191,11 @@ data class FocusRecord(
 
 val defaultHomeworkSubjects = listOf("语文", "数学", "英语")
 val homeworkSubjects = listOf("语文", "数学", "英语", "科学", "其他")
+const val FOCUS_SUBJECT_MAX_MINUTES = 60
+const val DEFAULT_DICTIONARY_DAILY_LIMIT = 20
+
+fun maximumExpectedMinutes(subject: String): Int =
+    if (subject in defaultHomeworkSubjects) FOCUS_SUBJECT_MAX_MINUTES else 99
 
 fun inferSubject(taskName: String): String = homeworkSubjects
     .dropLast(1)
@@ -216,21 +222,25 @@ class LocalStore(context: Context) {
         preferences.edit { putString("lessons", encoded) }
     }
 
-    fun loadTimer(): TimerSnapshot = TimerSnapshot(
-        taskName = preferences.getString("timer_name", "语文作业") ?: "语文作业",
-        subject = preferences.getString("timer_subject", null)
-            ?: inferSubject(preferences.getString("timer_name", "语文作业") ?: "语文作业"),
-        expectedMinutes = preferences.getInt("timer_expected", loadExpectedMinutes()),
-        elapsedSeconds = preferences.getInt("timer_elapsed", 0).coerceAtLeast(0),
-        running = preferences.getBoolean("timer_running", false),
-        startedAtMillis = preferences.getLong("timer_started", 0L),
-    )
+    fun loadTimer(): TimerSnapshot {
+        val taskName = preferences.getString("timer_name", "语文作业") ?: "语文作业"
+        val subject = preferences.getString("timer_subject", null) ?: inferSubject(taskName)
+        return TimerSnapshot(
+            taskName = taskName,
+            subject = subject,
+            expectedMinutes = preferences.getInt("timer_expected", loadExpectedMinutes())
+                .coerceIn(10, maximumExpectedMinutes(subject)),
+            elapsedSeconds = preferences.getInt("timer_elapsed", 0).coerceAtLeast(0),
+            running = preferences.getBoolean("timer_running", false),
+            startedAtMillis = preferences.getLong("timer_started", 0L),
+        )
+    }
 
     fun saveTimer(snapshot: TimerSnapshot) {
         preferences.edit {
             putString("timer_name", snapshot.taskName)
             putString("timer_subject", snapshot.subject)
-            putInt("timer_expected", snapshot.expectedMinutes)
+            putInt("timer_expected", snapshot.expectedMinutes.coerceIn(10, maximumExpectedMinutes(snapshot.subject)))
             putInt("timer_elapsed", snapshot.elapsedSeconds)
             putBoolean("timer_running", snapshot.running)
             putLong("timer_started", snapshot.startedAtMillis)
@@ -245,13 +255,60 @@ class LocalStore(context: Context) {
 
     fun loadExpectedMinutes(subject: String): Int {
         val key = "expected_minutes_${subject.trim()}"
-        return preferences.getInt(key, loadExpectedMinutes()).coerceIn(10, 99)
+        return preferences.getInt(key, loadExpectedMinutes()).coerceIn(10, maximumExpectedMinutes(subject))
     }
 
     fun saveExpectedMinutes(subject: String, minutes: Int) {
         val cleanedSubject = subject.trim()
         if (cleanedSubject.isBlank()) return
-        preferences.edit { putInt("expected_minutes_$cleanedSubject", minutes.coerceIn(10, 99)) }
+        preferences.edit {
+            putInt("expected_minutes_$cleanedSubject", minutes.coerceIn(10, maximumExpectedMinutes(cleanedSubject)))
+        }
+    }
+
+    fun isFocusModeActive(): Boolean = preferences.getBoolean("focus_mode_active", false)
+
+    fun saveFocusModeActive(active: Boolean) {
+        preferences.edit { putBoolean("focus_mode_active", active) }
+    }
+
+    fun loadDictionaryDailyLimit(): Int {
+        val today = LocalDate.now().toString()
+        if (preferences.getString("dictionary_limit_date", null) != today) return DEFAULT_DICTIONARY_DAILY_LIMIT
+        return preferences.getInt("dictionary_daily_limit", DEFAULT_DICTIONARY_DAILY_LIMIT).coerceIn(1, 200)
+    }
+
+    fun saveDictionaryDailyLimit(limit: Int) {
+        preferences.edit {
+            putString("dictionary_limit_date", LocalDate.now().toString())
+            putInt("dictionary_daily_limit", limit.coerceIn(1, 200))
+        }
+    }
+
+    fun loadDictionaryLookupWords(): Set<String> {
+        if (preferences.getString("dictionary_usage_date", null) != LocalDate.now().toString()) return emptySet()
+        val raw = preferences.getString("dictionary_lookup_words", null) ?: return emptySet()
+        return runCatching {
+            val array = JSONArray(raw)
+            buildSet { repeat(array.length()) { add(array.getString(it)) } }
+        }.getOrDefault(emptySet())
+    }
+
+    @Synchronized
+    fun recordDictionaryLookup(word: String): Boolean {
+        val normalized = word.trim()
+        if (normalized.isBlank()) return true
+        val words = loadDictionaryLookupWords().toMutableSet()
+        if (normalized in words) return true
+        if (words.size >= loadDictionaryDailyLimit()) return false
+        words += normalized
+        val array = JSONArray()
+        words.sorted().forEach { array.put(it) }
+        preferences.edit {
+            putString("dictionary_usage_date", LocalDate.now().toString())
+            putString("dictionary_lookup_words", array.toString())
+        }
+        return true
     }
 
     fun loadNavigationStyle(): String = preferences.getString("navigation_style", "fresh") ?: "fresh"
