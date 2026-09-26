@@ -16,6 +16,7 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
 import org.json.JSONArray
+import com.handdict.studyassistant.learning.BORROWING_DAILY_LIMIT
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -309,6 +310,27 @@ class LocalStore(context: Context) {
             putString("dictionary_lookup_words", array.toString())
         }
         return true
+    }
+
+    fun loadBorrowingCompletedToday(): Int {
+        if (preferences.getString("borrowing_progress_date", null) != LocalDate.now().toString()) return 0
+        return preferences.getInt("borrowing_progress_count", 0).coerceIn(0, BORROWING_DAILY_LIMIT)
+    }
+
+    @Synchronized
+    fun recordBorrowingCompletion(): Int {
+        val today = LocalDate.now().toString()
+        val current = if (preferences.getString("borrowing_progress_date", null) == today) {
+            preferences.getInt("borrowing_progress_count", 0)
+        } else {
+            0
+        }.coerceIn(0, BORROWING_DAILY_LIMIT)
+        val updated = (current + 1).coerceAtMost(BORROWING_DAILY_LIMIT)
+        preferences.edit {
+            putString("borrowing_progress_date", today)
+            putInt("borrowing_progress_count", updated)
+        }
+        return updated
     }
 
     fun loadNavigationStyle(): String = preferences.getString("navigation_style", "fresh") ?: "fresh"

@@ -189,7 +189,7 @@ import kotlin.math.sin
 
 private enum class AppScreen(val label: String, val symbol: String) {
     HOME("首页", "⌂"), TIMER("作业计时", "◷"), DICTIONARY("查字典", "▤"),
-    SCHEDULE("课程表", "▦"), WEATHER("天气", "☁"), SETTINGS("设置", "⚙"),
+    BORROWING("借位小能手", "−"), SCHEDULE("课程表", "▦"), WEATHER("天气", "☁"), SETTINGS("设置", "⚙"),
 }
 
 private enum class NavigationStyle(val key: String, val label: String, val description: String) {
@@ -206,6 +206,7 @@ private fun screenAccent(screen: AppScreen): Color = when (screen) {
     AppScreen.HOME -> Color(0xFF3D83EA)
     AppScreen.TIMER -> Color(0xFFFFA928)
     AppScreen.DICTIONARY -> Color(0xFF35B77C)
+    AppScreen.BORROWING -> Color(0xFF2677ED)
     AppScreen.SCHEDULE -> Color(0xFFFF7468)
     AppScreen.WEATHER -> Color(0xFF4AA8E8)
     AppScreen.SETTINGS -> Color(0xFF7B72E9)
@@ -215,6 +216,7 @@ private fun screenBackgroundResource(screen: AppScreen): Int = when (screen) {
     AppScreen.HOME -> R.drawable.mira_bg_home_v2
     AppScreen.TIMER -> R.drawable.mira_bg_timer_v2
     AppScreen.DICTIONARY -> R.drawable.mira_bg_dictionary
+    AppScreen.BORROWING -> R.drawable.mira_bg_home_v2
     AppScreen.SCHEDULE -> R.drawable.mira_bg_schedule
     AppScreen.WEATHER -> R.drawable.mira_bg_weather
     AppScreen.SETTINGS -> R.drawable.mira_bg_settings
@@ -225,6 +227,7 @@ private fun navigationIconResource(style: NavigationStyle, screen: AppScreen): I
         AppScreen.HOME -> R.drawable.mira_nav_fresh_home
         AppScreen.TIMER -> R.drawable.mira_nav_fresh_timer
         AppScreen.DICTIONARY -> R.drawable.mira_nav_fresh_dictionary
+        AppScreen.BORROWING -> R.drawable.mira_schedule_math
         AppScreen.SCHEDULE -> R.drawable.mira_nav_fresh_schedule
         AppScreen.WEATHER -> R.drawable.mira_nav_fresh_weather
         AppScreen.SETTINGS -> R.drawable.mira_nav_fresh_settings
@@ -233,6 +236,7 @@ private fun navigationIconResource(style: NavigationStyle, screen: AppScreen): I
         AppScreen.HOME -> R.drawable.mira_nav_colorful_home
         AppScreen.TIMER -> R.drawable.mira_nav_colorful_timer
         AppScreen.DICTIONARY -> R.drawable.mira_nav_colorful_dictionary
+        AppScreen.BORROWING -> R.drawable.mira_schedule_math
         AppScreen.SCHEDULE -> R.drawable.mira_nav_colorful_schedule
         AppScreen.WEATHER -> R.drawable.mira_nav_colorful_weather
         AppScreen.SETTINGS -> R.drawable.mira_nav_colorful_settings
@@ -241,6 +245,7 @@ private fun navigationIconResource(style: NavigationStyle, screen: AppScreen): I
         AppScreen.HOME -> R.drawable.mira_nav_journal_home
         AppScreen.TIMER -> R.drawable.mira_nav_journal_timer
         AppScreen.DICTIONARY -> R.drawable.mira_nav_journal_dictionary
+        AppScreen.BORROWING -> R.drawable.mira_schedule_math
         AppScreen.SCHEDULE -> R.drawable.mira_nav_journal_schedule
         AppScreen.WEATHER -> R.drawable.mira_nav_journal_weather
         AppScreen.SETTINGS -> R.drawable.mira_nav_journal_settings
@@ -249,6 +254,7 @@ private fun navigationIconResource(style: NavigationStyle, screen: AppScreen): I
         AppScreen.HOME -> R.drawable.mira_nav_minimal_home
         AppScreen.TIMER -> R.drawable.mira_nav_minimal_timer
         AppScreen.DICTIONARY -> R.drawable.mira_nav_minimal_dictionary
+        AppScreen.BORROWING -> R.drawable.mira_schedule_math
         AppScreen.SCHEDULE -> R.drawable.mira_nav_minimal_schedule
         AppScreen.WEATHER -> R.drawable.mira_nav_minimal_weather
         AppScreen.SETTINGS -> R.drawable.mira_nav_minimal_settings
@@ -257,6 +263,7 @@ private fun navigationIconResource(style: NavigationStyle, screen: AppScreen): I
         AppScreen.HOME -> R.drawable.mira_nav_stationery_home
         AppScreen.TIMER -> R.drawable.mira_nav_stationery_timer
         AppScreen.DICTIONARY -> R.drawable.mira_nav_stationery_dictionary
+        AppScreen.BORROWING -> R.drawable.mira_schedule_math
         AppScreen.SCHEDULE -> R.drawable.mira_nav_stationery_schedule
         AppScreen.WEATHER -> R.drawable.mira_nav_stationery_weather
         AppScreen.SETTINGS -> R.drawable.mira_nav_stationery_settings
@@ -290,7 +297,7 @@ private fun subjectAccent(subject: String): Color = when (subject) {
 }
 
 private val screenItems = AppScreen.entries
-private val focusScreenItems = listOf(AppScreen.HOME, AppScreen.TIMER, AppScreen.DICTIONARY)
+private val focusScreenItems = listOf(AppScreen.HOME, AppScreen.TIMER, AppScreen.DICTIONARY, AppScreen.BORROWING)
 private val cardShape = RoundedCornerShape(24.dp)
 
 private data class ParentGateRequest(val title: String, val action: () -> Unit)
@@ -313,6 +320,20 @@ private fun leaveSystemFocusMode(activity: Activity) {
     WindowCompat.getInsetsController(activity.window, activity.window.decorView)
         .show(WindowInsetsCompat.Type.systemBars())
 }
+
+private fun openSystemHomeSettingsAfterFocusExit(activity: Activity) {
+    // stopLockTask() needs a brief moment to release the system UI before another app can open.
+    activity.window.decorView.postDelayed({
+        Toast.makeText(activity, "请选择“小米系统桌面”并设为默认", Toast.LENGTH_LONG).show()
+        runCatching {
+            activity.startActivity(Intent(Settings.ACTION_HOME_SETTINGS))
+        }.recoverCatching {
+            activity.startActivity(Intent(Settings.ACTION_SETTINGS))
+        }.onFailure {
+            Toast.makeText(activity, "系统设置未能打开，请从顶部控制中心进入设置", Toast.LENGTH_LONG).show()
+        }
+    }, 350L)
+}
 private val miraDisplayFont = FontFamily(Font(R.font.zcool_kuaile_regular))
 private val miraHandFont = FontFamily(Font(R.font.ma_shan_zheng_regular))
 private val miraKaiFont = FontFamily(Font(R.font.lxgw_wenkai_regular))
@@ -328,6 +349,7 @@ private fun screenIcon(screen: AppScreen): ImageVector = when (screen) {
     AppScreen.HOME -> Icons.Rounded.Home
     AppScreen.TIMER -> Icons.Rounded.AccessTime
     AppScreen.DICTIONARY -> Icons.AutoMirrored.Rounded.MenuBook
+    AppScreen.BORROWING -> Icons.Rounded.Edit
     AppScreen.SCHEDULE -> Icons.Rounded.CalendarMonth
     AppScreen.WEATHER -> Icons.Rounded.WbSunny
     AppScreen.SETTINGS -> Icons.Rounded.Settings
@@ -500,7 +522,10 @@ fun MiraStudyApp() {
         requestParentApproval("是否退出专注模式？") {
             focusModeActive = false
             store.saveFocusModeActive(false)
-            (context as? Activity)?.let(::leaveSystemFocusMode)
+            (context as? Activity)?.let { activity ->
+                leaveSystemFocusMode(activity)
+                openSystemHomeSettingsAfterFocusExit(activity)
+            }
             selected = AppScreen.HOME
         }
     }
@@ -748,11 +773,11 @@ private fun PageTitleBlock(
     ) {
         NavigationStyleIcon(navigationStyle, screen, Modifier.size(50.dp))
         Spacer(Modifier.width(10.dp))
-        Column(Modifier.width(190.dp)) {
+        Column(Modifier.width(if (screen == AppScreen.BORROWING) 260.dp else 190.dp)) {
             Text(
                 screen.label,
                 color = Color(0xFF082B63),
-                fontSize = 42.sp,
+                fontSize = if (screen == AppScreen.BORROWING) 34.sp else 42.sp,
                 lineHeight = 44.sp,
                 fontWeight = FontWeight.Black,
                 maxLines = 1,
@@ -979,7 +1004,7 @@ private fun TabletNavigation(
 ) {
     Column(
         modifier = Modifier
-            .width(132.dp)
+            .width(150.dp)
             .fillMaxHeight()
             .padding(horizontal = 11.dp, vertical = 15.dp),
     ) {
@@ -1097,6 +1122,7 @@ private fun ScreenContent(
                 onRequestParentApproval = onRequestParentApproval,
             )
             AppScreen.DICTIONARY -> DictionaryScreen(initialQuery = dictionaryQuery, onVoiceSessionChanged = onManualVoiceSessionChanged)
+            AppScreen.BORROWING -> BorrowingTrainerScreen()
             AppScreen.SCHEDULE -> ScheduleScreen()
             AppScreen.WEATHER -> WeatherScreen()
             AppScreen.SETTINGS -> SettingsScreen(
